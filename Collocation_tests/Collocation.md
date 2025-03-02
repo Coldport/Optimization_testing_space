@@ -121,3 +121,22 @@ The multi-shot method divides the time horizon into multiple segments (or "shots
 
     return result.x, times
    ```
+
+5. **`simulate_system(u_optimized, z0, dt, N, num_shots)`** :
+
+ - Simulates the system using the optimized control inputs.
+
+   ```python
+   def simulate_system(u_optimized, z0, dt, N, num_shots):
+    z = np.zeros((2, N * num_shots + 1))  # State vector (position and velocity)
+    z[:, 0] = z0  # Initial state
+
+    # Simulate the system using the optimized control inputs
+    for shot in range(num_shots):
+        for i in range(N):
+            idx = shot * N + i
+            z[:, idx+1] = z[:, idx] + dynamics(z[:, idx], u_optimized[idx]) * dt
+
+    return z
+
+   ```
