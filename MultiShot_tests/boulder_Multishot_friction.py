@@ -2,11 +2,16 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import minimize
 
+# Constants
+g = 9.81  # Acceleration due to gravity (m/s^2)
+
 # Define the system dynamics for position (x) and velocity (v)
-def system_dynamics(state, control_input):
+def dynamics(state, control_input, mass, friction_coefficient):
     x, v = state
     dxdt = v
-    dvdt = control_input
+    # Frictional force opposes the direction of motion
+    frictional_force = friction_coefficient * mass * g * np.sign(v) if v != 0 else 0
+    dvdt = (control_input - frictional_force) / mass  # Include friction
     return np.array([dxdt, dvdt])
 
 # Objective function: Minimize control effort (force squared)
@@ -14,7 +19,7 @@ def minimize_control_effort(control_inputs):
     return np.sum(control_inputs**2)  # Minimize the sum of squared control inputs
 
 # Constraint function: Ensure dynamics are satisfied at collocation points
-def enforce_constraints(control_inputs, initial_state, target_state, dt, num_steps_per_shot, num_shots):
+def enforce_constraints(control_inputs, initial_state, target_state, dt, num_steps_per_shot, num_shots, mass, friction_coefficient):
     state = np.zeros((2, num_steps_per_shot * num_shots + 1))  # State vector (position and velocity)
     state[:, 0] = initial_state  # Initial state
 
@@ -22,24 +27,24 @@ def enforce_constraints(control_inputs, initial_state, target_state, dt, num_ste
     for shot in range(num_shots):
         for i in range(num_steps_per_shot):
             idx = shot * num_steps_per_shot + i
-            state[:, idx+1] = state[:, idx] + system_dynamics(state[:, idx], control_inputs[idx]) * dt
+            state[:, idx + 1] = state[:, idx] + dynamics(state[:, idx], control_inputs[idx], mass, friction_coefficient) * dt
 
     # Collocation constraints: Ensure dynamics are satisfied at segment boundaries
     collocation_constraints = []
     for shot in range(1, num_shots):
         idx = shot * num_steps_per_shot
         # Dynamics at the boundary
-        dz = system_dynamics(state[:, idx], control_inputs[idx])
+        dz = dynamics(state[:, idx], control_inputs[idx], mass, friction_coefficient)
         # Collocation constraint: Match the dynamics
-        collocation_constraints.extend(state[:, idx] - state[:, idx-1] - dz * dt)
+        collocation_constraints.extend(state[:, idx] - state[:, idx - 1] - dz * dt)
 
     # Final state constraint: position = target_position, velocity = 0
     final_state_constraints = [state[0, -1] - target_state[0], state[1, -1] - target_state[1]]
 
     return np.array(collocation_constraints + final_state_constraints)
 
-
-def optimize_trajectory(initial_state, target_state, num_steps_per_shot, num_shots, total_time):
+# Multi-shot optimization with collocation
+def optimize_trajectory(initial_state, target_state, num_steps_per_shot, num_shots, total_time, mass, friction_coefficient):
     dt = total_time / (num_steps_per_shot * num_shots)  # Time step size
     times = np.linspace(0, total_time, num_steps_per_shot * num_shots + 1)  # Time vector
 
@@ -50,7 +55,7 @@ def optimize_trajectory(initial_state, target_state, num_steps_per_shot, num_sho
     constraints = {
         'type': 'eq',
         'fun': enforce_constraints,
-        'args': (initial_state, target_state, dt, num_steps_per_shot, num_shots)
+        'args': (initial_state, target_state, dt, num_steps_per_shot, num_shots, mass, friction_coefficient)
     }
 
     # Run the optimization to minimize control effort, subject to constraints
@@ -64,7 +69,7 @@ def optimize_trajectory(initial_state, target_state, num_steps_per_shot, num_sho
     return result.x, times
 
 # Simulate the system using the optimized control inputs
-def simulate_trajectory(optimized_controls, initial_state, dt, num_steps_per_shot, num_shots):
+def simulate_system(optimized_controls, initial_state, dt, num_steps_per_shot, num_shots, mass, friction_coefficient):
     state = np.zeros((2, num_steps_per_shot * num_shots + 1))  # State vector (position and velocity)
     state[:, 0] = initial_state  # Initial state
 
@@ -72,30 +77,12 @@ def simulate_trajectory(optimized_controls, initial_state, dt, num_steps_per_sho
     for shot in range(num_shots):
         for i in range(num_steps_per_shot):
             idx = shot * num_steps_per_shot + i
-            state[:, idx+1] = state[:, idx] + system_dynamics(state[:, idx], optimized_controls[idx]) * dt
+            state[:, idx + 1] = state[:, idx] + dynamics(state[:, idx], optimized_controls[idx], mass, friction_coefficient) * dt
 
     return state
 
-# Main function
-def main():
-    # Define parameters
-    num_steps_per_shot = 100 # Number of time steps per shot
-    num_shots = 5  # Number of shots
-    total_time = 1.0  # Total time duration
-    target_position = 5.0  # Target position
-    initial_state = np.array([0, 0])  # Initial state: [0, 0] (position 0, velocity 0)
-    target_state = np.array([target_position, 0])  # Final state: [target_position, 0]
-
-    # Run the optimization
-    optimized_controls, times = optimize_trajectory(initial_state, target_state, num_steps_per_shot, num_shots, total_time)
-
-    # Simulate the system with the optimized control
-    states = simulate_trajectory(optimized_controls, initial_state, total_time / (num_steps_per_shot * num_shots), num_steps_per_shot, num_shots)
-    time = np.linspace(0, total_time, num_steps_per_shot * num_shots + 1)
-    position = states[0, :]
-    velocity = states[1, :]
-
-    # Plot the results
+# Plot the results
+def plot_results(time, position, velocity, optimized_controls, target_position):
     plt.figure(figsize=(10, 6))
 
     # Plot position over time
@@ -125,5 +112,29 @@ def main():
     plt.tight_layout()
     plt.show()
 
+# Main function
+def main():
+    # Define parameters
+    num_steps_per_shot = 20  # Number of time steps per shot
+    num_shots = 5  # Number of shots
+    total_time = 2.0  # Total time duration
+    target_position = 5.0  # Target position
+    mass = 0.10  # Mass of the boulder (kg)
+    friction_coefficient = 0.1  # Coefficient of friction
+    initial_state = np.array([0, 0])  # Initial state: [0, 0] (position 0, velocity 0)
+    target_state = np.array([target_position, 0])  # Final state: [target_position, 0]
+
+    # Run the optimization
+    optimized_controls, times = optimize_trajectory(initial_state, target_state, num_steps_per_shot, num_shots, total_time, mass, friction_coefficient)
+
+    # Simulate the system with the optimized control
+    states = simulate_system(optimized_controls, initial_state, total_time / (num_steps_per_shot * num_shots), num_steps_per_shot, num_shots, mass, friction_coefficient)
+    position = states[0, :]
+    velocity = states[1, :]
+
+    # Plot the results
+    plot_results(times, position, velocity, optimized_controls, target_position)
+
+# Entry point of the script
 if __name__ == "__main__":
     main()
