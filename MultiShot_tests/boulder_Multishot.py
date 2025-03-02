@@ -28,8 +28,12 @@ def constraint(u, z0, z1, dt, N, num_shots):
     continuity_constraints = []
     for shot in range(1, num_shots):
         idx = shot * N
-        continuity_constraints.append(z[0, idx] - z[0, idx-1])  # Position continuity
-        continuity_constraints.append(z[1, idx] - z[1, idx-1])  # Velocity continuity
+        # Position continuity
+        continuity_constraints.append(z[0, idx] - z[0, idx-1])
+        # Velocity continuity
+        continuity_constraints.append(z[1, idx] - z[1, idx-1])
+        # Control input continuity (optional, but recommended)
+        continuity_constraints.append(u[idx] - u[idx-1])
 
     # Final state constraint: position = 2, velocity = 0
     final_state_constraints = [z[0, -1] - z1[0], z[1, -1] - z1[1]]
