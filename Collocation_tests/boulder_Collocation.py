@@ -24,38 +24,24 @@ def constraint(u, z0, z1, dt, N, num_shots):
             idx = shot * N + i
             z[:, idx+1] = z[:, idx] + dynamics(z[:, idx], u[idx]) * dt
 
-    # Collocation constraints: Ensure dynamics are satisfied at collocation points
+    # Collocation constraints: Ensure dynamics are satisfied at segment boundaries
     collocation_constraints = []
-    for shot in range(num_shots):
-        for i in range(N - 1):  # Stop at N-1 to avoid index out of bounds
-            idx = shot * N + i
-            # Dynamics at the midpoint of the time step
-            z_mid = 0.5 * (z[:, idx] + z[:, idx+1])
-            u_mid = 0.5 * (u[idx] + u[idx+1])
-            dz_mid = dynamics(z_mid, u_mid)
-            # Collocation constraint: Match the midpoint dynamics
-            collocation_constraints.extend(z[:, idx+1] - z[:, idx] - dz_mid * dt)
-
-    # Continuity constraints between shots
-    continuity_constraints = []
     for shot in range(1, num_shots):
         idx = shot * N
-        # Position continuity
-        continuity_constraints.append(z[0, idx] - z[0, idx-1])
-        # Velocity continuity
-        continuity_constraints.append(z[1, idx] - z[1, idx-1])
-        # Control input continuity
-        continuity_constraints.append(u[idx] - u[idx-1])
+        # Dynamics at the boundary
+        dz = dynamics(z[:, idx], u[idx])
+        # Collocation constraint: Match the dynamics
+        collocation_constraints.extend(z[:, idx] - z[:, idx-1] - dz * dt)
 
     # Final state constraint: position = target_position, velocity = 0
     final_state_constraints = [z[0, -1] - z1[0], z[1, -1] - z1[1]]
 
-    return np.array(collocation_constraints + continuity_constraints + final_state_constraints)
+    return np.array(collocation_constraints + final_state_constraints)
 
 # Multi-shot optimization with collocation
-def solve_block_move_multishot(z0, z1, N, num_shots):
-    dt = 1.0 / (N * num_shots)  # Time step size
-    times = np.linspace(0, 1, N * num_shots + 1)  # Time vector
+def solve_block_move_multishot(z0, z1, N, num_shots, T):
+    dt = T / (N * num_shots)  # Time step size
+    times = np.linspace(0, T, N * num_shots + 1)  # Time vector
 
     # Initial guess for control inputs (force)
     u_guess = np.ones(N * num_shots) * 0.1  # Small initial force
@@ -93,18 +79,19 @@ def simulate_system(u_optimized, z0, dt, N, num_shots):
 # Main function
 def main():
     # Define parameters
-    N = 100  # Number of time steps per shot
-    num_shots = 5  # Number of shots
-    target_position = 2.0  # Target position
+    N = 20  # Number of time steps per shot
+    num_shots = 3  # Number of shots
+    T = 20.0  # Total time duration (changed from 1.0 to 2.0)
+    target_position = 20.0  # Target position
     z0 = np.array([0, 0])  # Initial state: [0, 0] (position 0, velocity 0)
     z1 = np.array([target_position, 0])  # Final state: [target_position, 0]
 
     # Run the optimization
-    optimized_controls, times = solve_block_move_multishot(z0, z1, N, num_shots)
+    optimized_controls, times = solve_block_move_multishot(z0, z1, N, num_shots, T)
 
     # Simulate the system with the optimized control
-    states = simulate_system(optimized_controls, z0, 1.0 / (N * num_shots), N, num_shots)
-    time = np.linspace(0, 1, N * num_shots + 1)
+    states = simulate_system(optimized_controls, z0, T / (N * num_shots), N, num_shots)
+    time = np.linspace(0, T, N * num_shots + 1)
     position = states[0, :]
     velocity = states[1, :]
 
