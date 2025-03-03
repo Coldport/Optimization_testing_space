@@ -10,7 +10,7 @@ def dynamics(state, control_input, mass, friction_coefficient):
     x, v = state
     dxdt = v
     # Frictional force opposes the direction of motion
-    frictional_force = friction_coefficient * mass * g * np.sign(v) if v != 0 else 0
+    frictional_force = friction_coefficient * mass * g  if v != 0 else 0
     dvdt = (control_input - frictional_force) / mass  # Include friction
     return np.array([dxdt, dvdt])
 
@@ -59,7 +59,11 @@ def optimize_trajectory(initial_state, target_state, num_steps_per_shot, num_sho
     }
 
     # Run the optimization to minimize control effort, subject to constraints
-    result = minimize(minimize_control_effort, initial_guess_controls, constraints=constraints, method='SLSQP')
+    result = minimize(minimize_control_effort, initial_guess_controls, constraints=constraints, method='SLSQP',options={
+            'maxiter': 10000,  # Increase iteration limit
+            'ftol': 5e-6,     # Increase tolerance for objective function
+            'eps': 5e-4       # Increase step size for numerical derivatives
+        })
 
     if result.success:
         print("Optimization successful!")
@@ -115,11 +119,11 @@ def plot_results(time, position, velocity, optimized_controls, target_position):
 # Main function
 def main():
     # Define parameters
-    num_steps_per_shot = 20  # Number of time steps per shot
+    num_steps_per_shot = 10  # Number of time steps per shot
     num_shots = 5  # Number of shots
-    total_time = 2.0  # Total time duration
-    target_position = 5.0  # Target position
-    mass = 0.10  # Mass of the boulder (kg)
+    total_time = 1.0  # Total time duration
+    target_position = 50.0  # Target position
+    mass = 10  # Mass of the boulder (kg)
     friction_coefficient = 0.1  # Coefficient of friction
     initial_state = np.array([0, 0])  # Initial state: [0, 0] (position 0, velocity 0)
     target_state = np.array([target_position, 0])  # Final state: [target_position, 0]

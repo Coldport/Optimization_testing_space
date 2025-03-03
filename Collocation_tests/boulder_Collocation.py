@@ -54,7 +54,11 @@ def optimize_trajectory(initial_state, target_state, num_steps_per_shot, num_sho
     }
 
     # Run the optimization to minimize control effort, subject to constraints
-    result = minimize(minimize_control_effort, initial_guess_controls, constraints=constraints, method='SLSQP')
+    result = minimize(minimize_control_effort, initial_guess_controls, constraints=constraints, method='SLSQP',options={
+            'maxiter': 10000,  # Increase iteration limit
+            'ftol': 5e-6,     # Increase tolerance for objective function
+            'eps': 5e-4       # Increase step size for numerical derivatives
+        })
 
     if result.success:
         print("Optimization successful!")
@@ -82,7 +86,7 @@ def main():
     num_steps_per_shot = 100 # Number of time steps per shot
     num_shots = 5  # Number of shots
     total_time = 1.0  # Total time duration
-    target_position = 5.0  # Target position
+    target_position = 50.0  # Target position
     initial_state = np.array([0, 0])  # Initial state: [0, 0] (position 0, velocity 0)
     target_state = np.array([target_position, 0])  # Final state: [target_position, 0]
 

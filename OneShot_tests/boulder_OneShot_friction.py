@@ -46,7 +46,11 @@ def optimize_trajectory(initial_state, target_state, num_steps, total_time, mass
     }
 
     # Run the optimization to minimize control effort, subject to the final state constraint
-    result = minimize(minimize_control_effort, initial_guess_controls, constraints=constraints, method='SLSQP')
+    result = minimize(minimize_control_effort, initial_guess_controls, constraints=constraints, method='SLSQP',options={
+            'maxiter': 10000,  # Increase iteration limit
+            'ftol': 5e-6,     # Increase tolerance for objective function
+            'eps': 5e-4       # Increase step size for numerical derivatives
+        })
 
     if result.success:
         print("Optimization successful!")
@@ -100,11 +104,11 @@ def plot_results(time, position, velocity, optimized_controls, target_position):
 # Main function
 def main():
     # Define parameters
-    num_steps = 50  # Number of time steps
-    total_time = 10.0  # Total time duration
-    target_position = 5.0  # Target position
+    num_steps = 100  # Number of time steps
+    total_time = 1.0  # Total time duration
+    target_position = 50.0  # Target position
     mass = 10.0  # Mass of the boulder (kg)
-    friction_coefficient = 0.61  # Coefficient of friction
+    friction_coefficient = 0.1  # Coefficient of friction
     initial_state = np.array([0, 0])  # Initial state: [0, 0] (position 0, velocity 0)
     target_state = np.array([target_position, 0])  # Final state: [target_position, 0]
 
