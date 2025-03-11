@@ -33,7 +33,7 @@ def solve_block_move_oneshot():
 
     # Boundary conditions: Move from position 0 to position 2, with velocity 0 at both ends
     z0 = np.array([0, 0])  # Initial state: [0, 0] (position 0, velocity 0)
-    z1 = np.array([5, 0])  # Final state: [2, 0] (position 2, velocity 0)
+    z1 = np.array([1, 0])  # Final state: [2, 0] (position 2, velocity 0)
 
     # Initial guess for control inputs (force)
     u_guess = np.ones(N) * 0.1  # Small initial force

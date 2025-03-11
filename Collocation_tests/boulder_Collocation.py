@@ -86,7 +86,7 @@ def main():
     num_steps_per_shot = 100 # Number of time steps per shot
     num_shots = 5  # Number of shots
     total_time = 1.0  # Total time duration
-    target_position = 50.0  # Target position
+    target_position = 1.0  # Target position
     initial_state = np.array([0, 0])  # Initial state: [0, 0] (position 0, velocity 0)
     target_state = np.array([target_position, 0])  # Final state: [target_position, 0]
 

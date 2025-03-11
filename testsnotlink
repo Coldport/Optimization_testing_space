@@ -1,0 +1,4 @@
+import pyoptsparse
+
+solver = pyoptsparse.SNOPT()
+print("SNOPT is properly linked!")
