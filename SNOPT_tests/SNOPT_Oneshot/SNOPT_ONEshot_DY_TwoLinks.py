@@ -2,6 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from casadi import MX, vertcat, nlpsol
 from matplotlib.animation import FuncAnimation
+from matplotlib.widgets import Slider
 
 # Forward Kinematics: Calculate the end-effector position based on joint angles
 def forward_kinematics(theta1, theta2, l1, l2):
@@ -128,7 +129,7 @@ def main():
     # Robot parameters
     l1 = 5
     l2 = 5
-    m1 = 5
+    m1 = 0.5
     m2 = 0.51
     num_steps = 100
     total_time = 10.0
@@ -137,8 +138,12 @@ def main():
     initial_state = np.array([0, 0, 0, 0])  # [theta1, theta2, omega1, omega2]
 
     # Create a figure with subplots for animation and plots
-    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(10, 12))
-    fig.suptitle("Robot Arm Simulation")
+    fig = plt.figure(figsize=(12, 10))
+    gs = fig.add_gridspec(3, 2, width_ratios=[3, 1])
+    ax1 = fig.add_subplot(gs[0, 0])  # Robot arm animation
+    ax2 = fig.add_subplot(gs[1, 0])  # Angular velocity plot
+    ax3 = fig.add_subplot(gs[2, 0])  # Torque plot
+    ax_sliders = fig.add_subplot(gs[:, 1])  # Sliders
 
     # Initialize the robot arm plot
     ax1.set_xlim(-(l1 + l2 + 1), (l1 + l2 + 1))
@@ -174,6 +179,23 @@ def main():
     tau2_line, = ax3.plot([], [], label="Tau2 (Link 2)")
     ax3.legend()
 
+    # Add vertical lines to track time in plots
+    vline_ax2 = ax2.axvline(x=0, color='r', linestyle='--')
+    vline_ax3 = ax3.axvline(x=0, color='r', linestyle='--')
+
+    # Add sliders for time, link lengths, and weights
+    ax_time = plt.axes([0.75, 0.8, 0.2, 0.03])
+    ax_l1 = plt.axes([0.75, 0.7, 0.2, 0.03])
+    ax_l2 = plt.axes([0.75, 0.6, 0.2, 0.03])
+    ax_m1 = plt.axes([0.75, 0.5, 0.2, 0.03])
+    ax_m2 = plt.axes([0.75, 0.4, 0.2, 0.03])
+
+    time_slider = Slider(ax_time, 'Time', 0, total_time, valinit=0)
+    l1_slider = Slider(ax_l1, 'L1', 1, 10, valinit=l1)
+    l2_slider = Slider(ax_l2, 'L2', 1, 10, valinit=l2)
+    m1_slider = Slider(ax_m1, 'M1', 0.1, 2, valinit=m1)
+    m2_slider = Slider(ax_m2, 'M2', 0.1, 2, valinit=m2)
+
     # Store the target position and animation object
     target_x, target_y = None, None
     ani = None
@@ -199,7 +221,9 @@ def main():
             x1, y1, x2, y2 = forward_kinematics(theta1_opt[frame], theta2_opt[frame], l1, l2)
             link1.set_data([0, x1], [0, y1])
             link2.set_data([x1, x2], [y1, y2])
-            return link1, link2
+            vline_ax2.set_xdata([times[frame], times[frame]])  # Update vertical line
+            vline_ax3.set_xdata([times[frame], times[frame]])  # Update vertical line
+            return link1, link2, vline_ax2, vline_ax3
 
         # Stop the previous animation if it exists
         if ani is not None:
@@ -231,6 +255,38 @@ def main():
 
         except ValueError as e:
             print(e)
+
+    # Function to handle slider updates
+    def update_sliders(val):
+        nonlocal l1, l2, m1, m2
+        l1 = l1_slider.val
+        l2 = l2_slider.val
+        m1 = m1_slider.val
+        m2 = m2_slider.val
+
+        # Re-run the optimization and update the animation
+        if target_x is not None and target_y is not None:
+            try:
+                # Calculate inverse kinematics
+                (theta1_up, theta2_up), (theta1_down, theta2_down) = inverse_kinematics(target_x, target_y, l1, l2)
+                target_state = np.array([theta1_up, theta2_up, 0, 0])  # Target state (elbow-up solution)
+
+                # Optimize trajectory
+                theta1_opt, theta2_opt, omega1_opt, omega2_opt, tau1_opt, tau2_opt, times = optimize_trajectory(
+                    initial_state, target_state, l1, l2, m1, m2, num_steps, total_time
+                )
+
+                # Update the animation and plots
+                update_animation_and_plots(theta1_opt, theta2_opt, omega1_opt, omega2_opt, tau1_opt, tau2_opt, times)
+
+            except ValueError as e:
+                print(e)
+
+    # Connect the sliders to the update function
+    l1_slider.on_changed(update_sliders)
+    l2_slider.on_changed(update_sliders)
+    m1_slider.on_changed(update_sliders)
+    m2_slider.on_changed(update_sliders)
 
     # Connect the click event to the handler
     fig.canvas.mpl_connect('button_press_event', on_click)
