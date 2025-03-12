@@ -132,7 +132,7 @@ def main():
     m1 = 0.5
     m2 = 0.51
     num_steps = 100
-    total_time = 10.0
+    total_time = 01.0
 
     # Initial state (fully extended, 0 angle)
     initial_state = np.array([0, 0, 0, 0])  # [theta1, theta2, omega1, omega2]
@@ -156,8 +156,6 @@ def main():
     link2, = ax1.plot([], [], 'r-', linewidth=2)
 
     # Initialize the angular velocity plot
-    ax2.set_xlim(0, total_time)
-    ax2.set_ylim(-5, 5)
     ax2.set_xlabel("Time")
     ax2.set_ylabel("Angular Velocity (rad/s)")
     ax2.set_title("Angular Velocities")
@@ -168,8 +166,6 @@ def main():
     ax2.legend()
 
     # Initialize the torque plot
-    ax3.set_xlim(0, total_time)
-    ax3.set_ylim(-10, 10)
     ax3.set_xlabel("Time")
     ax3.set_ylabel("Torque (Nm)")
     ax3.set_title("Torques")
@@ -184,11 +180,11 @@ def main():
     vline_ax3 = ax3.axvline(x=0, color='r', linestyle='--')
 
     # Add sliders for time, link lengths, and weights
-    ax_time = plt.axes([0.75, 0.8, 0.2, 0.03])
-    ax_l1 = plt.axes([0.75, 0.7, 0.2, 0.03])
-    ax_l2 = plt.axes([0.75, 0.6, 0.2, 0.03])
-    ax_m1 = plt.axes([0.75, 0.5, 0.2, 0.03])
-    ax_m2 = plt.axes([0.75, 0.4, 0.2, 0.03])
+    ax_time = plt.axes([0.75, 0.8, 0.13, 0.03])
+    ax_l1 = plt.axes([0.75, 0.7, 0.13, 0.03])
+    ax_l2 = plt.axes([0.75, 0.6, 0.13, 0.03])
+    ax_m1 = plt.axes([0.75, 0.5, 0.13, 0.03])
+    ax_m2 = plt.axes([0.75, 0.4, 0.13, 0.03])
 
     time_slider = Slider(ax_time, 'Time', 0, total_time, valinit=0)
     l1_slider = Slider(ax_l1, 'L1', 1, 10, valinit=l1)
@@ -207,12 +203,16 @@ def main():
         # Update the angular velocity plot
         omega1_line.set_data(times, omega1_opt)
         omega2_line.set_data(times, omega2_opt)
+        ax2.set_xlim(0, times[-1])  # Update x-axis range
+        ax2.set_ylim(min(min(omega1_opt), min(omega2_opt)) - 1, max(max(omega1_opt), max(omega2_opt)) + 1)  # Update y-axis range
         ax2.relim()
         ax2.autoscale_view()
 
         # Update the torque plot
         tau1_line.set_data(times[:-1], tau1_opt)
         tau2_line.set_data(times[:-1], tau2_opt)
+        ax3.set_xlim(0, times[-1])  # Update x-axis range
+        ax3.set_ylim(min(min(tau1_opt), min(tau2_opt)) - 1, max(max(tau1_opt), max(tau2_opt)) + 1)  # Update y-axis range
         ax3.relim()
         ax3.autoscale_view()
 
@@ -239,6 +239,7 @@ def main():
         nonlocal target_x, target_y
         target_x, target_y = event.xdata, event.ydata
         print(f"Target position set to: ({target_x}, {target_y})")
+        
 
         try:
             # Calculate inverse kinematics
@@ -252,6 +253,9 @@ def main():
 
             # Update the animation and plots
             update_animation_and_plots(theta1_opt, theta2_opt, omega1_opt, omega2_opt, tau1_opt, tau2_opt, times)
+            
+            
+            
 
         except ValueError as e:
             print(e)
