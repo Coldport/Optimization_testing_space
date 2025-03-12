@@ -51,8 +51,8 @@ def robot_dynamics(state, control, l1, l2, m1, m2, g=9.81):
 
     return vertcat(omega1, omega2, alpha1, alpha2)
 
-# SNOPT-based optimization to find joint angles and velocities
-def optimize_trajectory(initial_state, target_state, l1, l2, m1, m2, num_steps, total_time):
+# SNOPT-based optimization to find joint angles and velocities with torque and speed limits
+def optimize_trajectory(initial_state, target_state, l1, l2, m1, m2, num_steps, total_time, max_torque, max_speed):
     dt = total_time / num_steps
     times = np.linspace(0, total_time, num_steps + 1)
 
@@ -109,10 +109,32 @@ def optimize_trajectory(initial_state, target_state, l1, l2, m1, m2, num_steps, 
         'g': vertcat(*g)
     }
 
+    # Bounds for the variables (adding torque and speed limits)
+    lbx = []
+    ubx = []
+    
+    # No limits on theta1 and theta2 (full rotation allowed)
+    lbx += [-np.inf] * (num_steps + 1)  # Lower bound for theta1
+    ubx += [np.inf] * (num_steps + 1)   # Upper bound for theta1
+    lbx += [-np.inf] * (num_steps + 1)  # Lower bound for theta2
+    ubx += [np.inf] * (num_steps + 1)   # Upper bound for theta2
+    
+    # Speed limits for omega1 and omega2
+    lbx += [-max_speed] * (num_steps + 1)  # Lower bound for omega1
+    ubx += [max_speed] * (num_steps + 1)   # Upper bound for omega1
+    lbx += [-max_speed] * (num_steps + 1)  # Lower bound for omega2
+    ubx += [max_speed] * (num_steps + 1)   # Upper bound for omega2
+    
+    # Torque limits for tau1 and tau2
+    lbx += [-max_torque] * num_steps  # Lower bound for tau1
+    ubx += [max_torque] * num_steps   # Upper bound for tau1
+    lbx += [-max_torque] * num_steps  # Lower bound for tau2
+    ubx += [max_torque] * num_steps   # Upper bound for tau2
+
     # Solve with SNOPT
     solver = nlpsol('solver', 'snopt', nlp)
     x0 = np.zeros(nlp['x'].shape[0])
-    result = solver(x0=x0, lbg=lbg, ubg=ubg)
+    result = solver(x0=x0, lbx=lbx, ubx=ubx, lbg=lbg, ubg=ubg)
 
     # Extract results
     theta1_opt = result['x'][:num_steps + 1].full().flatten()
@@ -133,6 +155,8 @@ def main():
     m2 = 0.51
     num_steps = 100
     total_time = 10.0
+    max_torque = 10.0  # Default maximum torque (Nm)
+    max_speed = 5.0    # Default maximum angular velocity (rad/s)
 
     # Initial state (fully extended, 0 angle)
     initial_state = np.array([0, 0, 0, 0])  # [theta1, theta2, omega1, omega2]
@@ -144,6 +168,7 @@ def main():
     ax2 = fig.add_subplot(gs[1, 0])  # Angular velocity plot
     ax3 = fig.add_subplot(gs[2, 0])  # Torque plot
     ax_sliders = fig.add_subplot(gs[:, 1])  # Sliders
+    ax_sliders.axis('off')  # Hide the axes
 
     # Initialize the robot arm plot
     ax1.set_xlim(-(l1 + l2 + 1), (l1 + l2 + 1))
@@ -164,6 +189,11 @@ def main():
 
     omega1_line, = ax2.plot([], [], label="Omega1 (Link 1)")
     omega2_line, = ax2.plot([], [], label="Omega2 (Link 2)")
+    
+    # Add speed limit lines
+    speed_limit_upper, = ax2.plot([], [], 'k--', label="Speed Limit")
+    speed_limit_lower, = ax2.plot([], [], 'k--')
+    
     ax2.legend()
 
     # Initialize the torque plot
@@ -174,48 +204,77 @@ def main():
 
     tau1_line, = ax3.plot([], [], label="Tau1 (Link 1)")
     tau2_line, = ax3.plot([], [], label="Tau2 (Link 2)")
+    
+    # Add torque limit lines
+    torque_limit_upper, = ax3.plot([], [], 'k--', label="Torque Limit")
+    torque_limit_lower, = ax3.plot([], [], 'k--')
+    
     ax3.legend()
 
     # Add vertical lines to track time in plots
     vline_ax2 = ax2.axvline(x=0, color='r', linestyle='--')
     vline_ax3 = ax3.axvline(x=0, color='r', linestyle='--')
 
-    # Add sliders for time, link lengths, and weights
-    ax_time = plt.axes([0.75, 0.8, 0.2, 0.03])
-    ax_l1 = plt.axes([0.75, 0.7, 0.2, 0.03])
-    ax_l2 = plt.axes([0.75, 0.6, 0.2, 0.03])
-    ax_m1 = plt.axes([0.75, 0.5, 0.2, 0.03])
-    ax_m2 = plt.axes([0.75, 0.4, 0.2, 0.03])
+    # Add sliders for time, link lengths, weights, torque limit, and speed limit
+    slider_y_positions = [0.85, 0.78, 0.71, 0.64, 0.57, 0.50, 0.43]
+    slider_width = 0.14
+    slider_height = 0.03
+    slider_x = 0.82
+    
+    ax_time = plt.axes([slider_x, slider_y_positions[0], slider_width, slider_height])
+    ax_l1 = plt.axes([slider_x, slider_y_positions[1], slider_width, slider_height])
+    ax_l2 = plt.axes([slider_x, slider_y_positions[2], slider_width, slider_height])
+    ax_m1 = plt.axes([slider_x, slider_y_positions[3], slider_width, slider_height])
+    ax_m2 = plt.axes([slider_x, slider_y_positions[4], slider_width, slider_height])
+    ax_torque = plt.axes([slider_x, slider_y_positions[5], slider_width, slider_height])
+    ax_speed = plt.axes([slider_x, slider_y_positions[6], slider_width, slider_height])
 
-    time_slider = Slider(ax_time, 'Time', 0, total_time, valinit=0)
+    time_slider = Slider(ax_time, 'Time', 1, 20, valinit=total_time)
     l1_slider = Slider(ax_l1, 'L1', 1, 10, valinit=l1)
     l2_slider = Slider(ax_l2, 'L2', 1, 10, valinit=l2)
     m1_slider = Slider(ax_m1, 'M1', 0.1, 2, valinit=m1)
     m2_slider = Slider(ax_m2, 'M2', 0.1, 2, valinit=m2)
+    torque_slider = Slider(ax_torque, 'Max Torque', 1, 20, valinit=max_torque)
+    speed_slider = Slider(ax_speed, 'Max Speed', 1, 10, valinit=max_speed)
 
     # Store the target position and animation object
     target_x, target_y = None, None
     ani = None
 
+    # Function to update the limit lines on plots
+    def update_limit_lines(max_torque, max_speed, times):
+        # Update speed limit lines
+        speed_limit_upper.set_data([times[0], times[-1]], [max_speed, max_speed])
+        speed_limit_lower.set_data([times[0], times[-1]], [-max_speed, -max_speed])
+        
+        # Update torque limit lines
+        torque_limit_upper.set_data([times[0], times[-1]], [max_torque, max_torque])
+        torque_limit_lower.set_data([times[0], times[-1]], [-max_torque, -max_torque])
+
     # Function to update the animation and plots
-    def update_animation_and_plots(theta1_opt, theta2_opt, omega1_opt, omega2_opt, tau1_opt, tau2_opt, times):
+    def update_animation_and_plots(theta1_opt, theta2_opt, omega1_opt, omega2_opt, tau1_opt, tau2_opt, times, max_torque, max_speed):
         nonlocal ani
 
         # Update the angular velocity plot
         omega1_line.set_data(times, omega1_opt)
         omega2_line.set_data(times, omega2_opt)
-        ax2.set_xlim(0, times[-1])  # Update x-axis range
-        ax2.set_ylim(min(min(omega1_opt), min(omega2_opt)) - 1, max(max(omega1_opt), max(omega2_opt)) + 1)  # Update y-axis range
-        ax2.relim()
-        ax2.autoscale_view()
-
+        ax2.set_xlim(0, times[-1])
+        
+        # Set y-limits to show the speed limits and data
+        velocity_range = max(max(np.abs(omega1_opt)), max(np.abs(omega2_opt)), max_speed)
+        ax2.set_ylim(-velocity_range * 1.1, velocity_range * 1.1)
+        
         # Update the torque plot
         tau1_line.set_data(times[:-1], tau1_opt)
         tau2_line.set_data(times[:-1], tau2_opt)
-        ax3.set_xlim(0, times[-1])  # Update x-axis range
-        ax3.set_ylim(min(min(tau1_opt), min(tau2_opt)) - 1, max(max(tau1_opt), max(tau2_opt)) + 1)  # Update y-axis range
-        ax3.relim()
-        ax3.autoscale_view()
+        ax3.set_xlim(0, times[-1])
+        
+        # Set y-limits to show the torque limits and data
+        torque_range = max(max(np.abs(tau1_opt)), max(np.abs(tau2_opt)), max_torque)
+        ax3.set_ylim(-torque_range * 1.1, torque_range * 1.1)
+        
+        # Update limit lines
+        update_limit_lines(max_torque, max_speed, times)
 
         # Update the robot arm animation
         def update_arm(frame):
@@ -238,39 +297,57 @@ def main():
     # Function to handle mouse clicks
     def on_click(event):
         nonlocal target_x, target_y, initial_state
+        
+        # Check if the click is within the animation axes
+        if event.inaxes != ax1:
+            return
+            
         target_x, target_y = event.xdata, event.ydata
-        print(f"Target position set to: ({target_x}, {target_y})")
+        print(f"Target position set to: ({target_x:.2f}, {target_y:.2f})")
 
         # Mark the target position with a red dot
         target_point.set_data([target_x], [target_y])
 
         try:
+            # Get current parameter values
+            current_l1 = l1_slider.val
+            current_l2 = l2_slider.val
+            current_m1 = m1_slider.val
+            current_m2 = m2_slider.val
+            current_time = time_slider.val
+            current_max_torque = torque_slider.val
+            current_max_speed = speed_slider.val
+            
             # Calculate inverse kinematics
-            (theta1_up, theta2_up), (theta1_down, theta2_down) = inverse_kinematics(target_x, target_y, l1, l2)
+            (theta1_up, theta2_up), (theta1_down, theta2_down) = inverse_kinematics(target_x, target_y, current_l1, current_l2)
             target_state = np.array([theta1_up, theta2_up, 0, 0])  # Target state (elbow-up solution)
 
-            # Optimize trajectory
+            # Optimize trajectory with current parameters
             theta1_opt, theta2_opt, omega1_opt, omega2_opt, tau1_opt, tau2_opt, times = optimize_trajectory(
-                initial_state, target_state, l1, l2, m1, m2, num_steps, total_time
+                initial_state, target_state, current_l1, current_l2, current_m1, current_m2, 
+                num_steps, current_time, current_max_torque, current_max_speed
             )
 
             # Update the animation and plots
-            update_animation_and_plots(theta1_opt, theta2_opt, omega1_opt, omega2_opt, tau1_opt, tau2_opt, times)
+            update_animation_and_plots(theta1_opt, theta2_opt, omega1_opt, omega2_opt, tau1_opt, tau2_opt, times, 
+                                       current_max_torque, current_max_speed)
 
             # Update the initial state for the next trajectory
             initial_state = np.array([theta1_opt[-1], theta2_opt[-1], omega1_opt[-1], omega2_opt[-1]])
 
         except ValueError as e:
-            print(e)
+            print(f"Error: {e}")
 
     # Function to handle slider updates
     def update_sliders(val):
-        nonlocal l1, l2, m1, m2, total_time
+        nonlocal l1, l2, m1, m2, total_time, max_torque, max_speed
         l1 = l1_slider.val
         l2 = l2_slider.val
         m1 = m1_slider.val
         m2 = m2_slider.val
         total_time = time_slider.val
+        max_torque = torque_slider.val
+        max_speed = speed_slider.val
 
         # Re-run the optimization and update the animation
         if target_x is not None and target_y is not None:
@@ -281,14 +358,15 @@ def main():
 
                 # Optimize trajectory
                 theta1_opt, theta2_opt, omega1_opt, omega2_opt, tau1_opt, tau2_opt, times = optimize_trajectory(
-                    initial_state, target_state, l1, l2, m1, m2, num_steps, total_time
+                    initial_state, target_state, l1, l2, m1, m2, num_steps, total_time, max_torque, max_speed
                 )
 
                 # Update the animation and plots
-                update_animation_and_plots(theta1_opt, theta2_opt, omega1_opt, omega2_opt, tau1_opt, tau2_opt, times)
+                update_animation_and_plots(theta1_opt, theta2_opt, omega1_opt, omega2_opt, tau1_opt, tau2_opt, times, 
+                                          max_torque, max_speed)
 
             except ValueError as e:
-                print(e)
+                print(f"Error: {e}")
 
     # Connect the sliders to the update function
     l1_slider.on_changed(update_sliders)
@@ -296,9 +374,16 @@ def main():
     m1_slider.on_changed(update_sliders)
     m2_slider.on_changed(update_sliders)
     time_slider.on_changed(update_sliders)
+    torque_slider.on_changed(update_sliders)
+    speed_slider.on_changed(update_sliders)
+
+    # Add a text instruction on the figure
+    plt.figtext(0.5, 0.95, "Click in the plot to set a target position for the robot arm", 
+                ha="center", fontsize=12, bbox=dict(facecolor='white', alpha=0.7))
 
     # Connect the click event to the handler
     fig.canvas.mpl_connect('button_press_event', on_click)
+    plt.tight_layout()
     plt.show()
 
 # Entry point
