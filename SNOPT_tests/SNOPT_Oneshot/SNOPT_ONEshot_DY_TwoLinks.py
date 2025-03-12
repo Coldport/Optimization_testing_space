@@ -132,7 +132,7 @@ def main():
     m1 = 0.5
     m2 = 0.51
     num_steps = 100
-    total_time = 01.0
+    total_time = 10.0
 
     # Initial state (fully extended, 0 angle)
     initial_state = np.array([0, 0, 0, 0])  # [theta1, theta2, omega1, omega2]
@@ -154,6 +154,7 @@ def main():
 
     link1, = ax1.plot([], [], 'b-', linewidth=2)
     link2, = ax1.plot([], [], 'r-', linewidth=2)
+    target_point, = ax1.plot([], [], 'ro', markersize=8)  # Red dot for target position
 
     # Initialize the angular velocity plot
     ax2.set_xlabel("Time")
@@ -180,11 +181,11 @@ def main():
     vline_ax3 = ax3.axvline(x=0, color='r', linestyle='--')
 
     # Add sliders for time, link lengths, and weights
-    ax_time = plt.axes([0.75, 0.8, 0.13, 0.03])
-    ax_l1 = plt.axes([0.75, 0.7, 0.13, 0.03])
-    ax_l2 = plt.axes([0.75, 0.6, 0.13, 0.03])
-    ax_m1 = plt.axes([0.75, 0.5, 0.13, 0.03])
-    ax_m2 = plt.axes([0.75, 0.4, 0.13, 0.03])
+    ax_time = plt.axes([0.75, 0.8, 0.2, 0.03])
+    ax_l1 = plt.axes([0.75, 0.7, 0.2, 0.03])
+    ax_l2 = plt.axes([0.75, 0.6, 0.2, 0.03])
+    ax_m1 = plt.axes([0.75, 0.5, 0.2, 0.03])
+    ax_m2 = plt.axes([0.75, 0.4, 0.2, 0.03])
 
     time_slider = Slider(ax_time, 'Time', 0, total_time, valinit=0)
     l1_slider = Slider(ax_l1, 'L1', 1, 10, valinit=l1)
@@ -236,10 +237,12 @@ def main():
 
     # Function to handle mouse clicks
     def on_click(event):
-        nonlocal target_x, target_y
+        nonlocal target_x, target_y, initial_state
         target_x, target_y = event.xdata, event.ydata
         print(f"Target position set to: ({target_x}, {target_y})")
-        
+
+        # Mark the target position with a red dot
+        target_point.set_data([target_x], [target_y])
 
         try:
             # Calculate inverse kinematics
@@ -253,20 +256,21 @@ def main():
 
             # Update the animation and plots
             update_animation_and_plots(theta1_opt, theta2_opt, omega1_opt, omega2_opt, tau1_opt, tau2_opt, times)
-            
-            
-            
+
+            # Update the initial state for the next trajectory
+            initial_state = np.array([theta1_opt[-1], theta2_opt[-1], omega1_opt[-1], omega2_opt[-1]])
 
         except ValueError as e:
             print(e)
 
     # Function to handle slider updates
     def update_sliders(val):
-        nonlocal l1, l2, m1, m2
+        nonlocal l1, l2, m1, m2, total_time
         l1 = l1_slider.val
         l2 = l2_slider.val
         m1 = m1_slider.val
         m2 = m2_slider.val
+        total_time = time_slider.val
 
         # Re-run the optimization and update the animation
         if target_x is not None and target_y is not None:
@@ -291,6 +295,7 @@ def main():
     l2_slider.on_changed(update_sliders)
     m1_slider.on_changed(update_sliders)
     m2_slider.on_changed(update_sliders)
+    time_slider.on_changed(update_sliders)
 
     # Connect the click event to the handler
     fig.canvas.mpl_connect('button_press_event', on_click)
