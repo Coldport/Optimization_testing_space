@@ -168,7 +168,7 @@ def animate_trajectory(time, x_b, theta, length_pendulum, start_position=0, targ
 
         return boulder, pendulum
 
-    ani = FuncAnimation(fig, update, frames=len(time), interval=50, blit=True, repeat_delay=1000)
+    ani = FuncAnimation(fig, update, frames=len(time), interval=100, blit=True, repeat_delay=1000)
     plt.show()
 
 # Export results to CSV
@@ -189,7 +189,7 @@ def export_to_csv(time, x_b, theta, optimized_controls, filename="results.csv"):
 # Main function
 def main():
     # Define parameters
-    num_steps = 100  # Number of time steps
+    num_steps = 50  # Number of time steps
     total_time = 10.0  # Total time duration
     target_position = 10.0  # Target position
     mass_boulder = 10.0  # Mass of the boulder (kg)
