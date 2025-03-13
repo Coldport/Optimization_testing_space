@@ -173,8 +173,8 @@ def plot_results(times, omega1, omega2, tau1, tau2):
 # Main function
 def main():
     # User inputs
-    l1 = 1
-    l2 = 21.5
+    l1 = 1.5
+    l2 = 1.5
     m1 = 0.5
     m2 = 0.51
     target_x = float(input("Enter the target x position: "))

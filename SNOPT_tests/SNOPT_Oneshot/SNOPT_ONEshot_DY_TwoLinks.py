@@ -1,8 +1,9 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from casadi import MX, vertcat, nlpsol
+from casadi import MX, vertcat, nlpsol, sqrt, fmax, fmin, if_else, DM
 from matplotlib.animation import FuncAnimation
 from matplotlib.widgets import Slider
+from matplotlib.patches import Circle
 
 # Forward Kinematics: Calculate the end-effector position based on joint angles
 def forward_kinematics(theta1, theta2, l1, l2):
@@ -51,8 +52,33 @@ def robot_dynamics(state, control, l1, l2, m1, m2, g=9.81):
 
     return vertcat(omega1, omega2, alpha1, alpha2)
 
-# SNOPT-based optimization to find joint angles and velocities with torque and speed limits
-def optimize_trajectory(initial_state, target_state, l1, l2, m1, m2, num_steps, total_time, max_torque, max_speed):
+
+
+def point_to_segment_distance(px, py, x1, y1, x2, y2):
+    # Vector from start to end of segment
+    dx = x2 - x1
+    dy = y2 - y1
+    # Length of segment squared
+    l2 = dx*dx + dy*dy
+    
+    # Use CasADi's conditional expressions instead of if statements
+    # Add a small epsilon to avoid division by zero
+    epsilon = 1e-10
+    l2_safe = if_else(l2 < epsilon, epsilon, l2)
+    
+    # Calculate parameter t for projection
+    t_raw = ((px - x1) * dx + (py - y1) * dy) / l2_safe
+    t = fmin(1, fmax(0, t_raw))
+    
+    # Find closest point on segment
+    proj_x = x1 + t * dx
+    proj_y = y1 + t * dy
+    
+    # Return distance to closest point
+    return sqrt((px - proj_x)**2 + (py - proj_y)**2)
+
+# SNOPT-based optimization to find joint angles and velocities with torque and speed limits and obstacle avoidance
+def optimize_trajectory(initial_state, target_state, l1, l2, m1, m2, num_steps, total_time, max_torque, max_speed, obstacles):
     dt = total_time / num_steps
     times = np.linspace(0, total_time, num_steps + 1)
 
@@ -102,9 +128,40 @@ def optimize_trajectory(initial_state, target_state, l1, l2, m1, m2, num_steps, 
     lbg += [0, 0, 0, 0]
     ubg += [0, 0, 0, 0]
 
+    # Obstacle avoidance constraints
+    obstacle_radius = 0.5  # Radius of the obstacle (safety margin)
+    min_distance = 0.1    # Minimum allowable distance between link and obstacle
+    
+    if obstacles:
+        for i in range(num_steps + 1):
+            # Calculate the positions of the joints based on the angles
+            x1 = l1 * MX.cos(theta1[i])
+            y1 = l1 * MX.sin(theta1[i])
+            x2 = x1 + l2 * MX.cos(theta1[i] + theta2[i])
+            y2 = y1 + l2 * MX.sin(theta1[i] + theta2[i])
+            
+            for obs_x, obs_y, obs_rad in obstacles:
+                # Calculate distance from obstacle to link 1 (origin to first joint)
+                dist_link1 = point_to_segment_distance(obs_x, obs_y, 0, 0, x1, y1) - obs_rad - min_distance
+                
+                # Calculate distance from obstacle to link 2 (first joint to end effector)
+                dist_link2 = point_to_segment_distance(obs_x, obs_y, x1, y1, x2, y2) - obs_rad - min_distance
+                
+                # Add constraints: distances must be >= 0 (no collision)
+                g.append(dist_link1)
+                lbg.append(0)
+                ubg.append(MX.inf)
+                
+                g.append(dist_link2)
+                lbg.append(0)
+                ubg.append(MX.inf)
+
+    # Create the NLP problem
+    # Inside the optimize_trajectory function, replace the solver call section with this:
+
     # Create the NLP problem
     nlp = {
-        'x': vertcat(theta1, theta2, omega1, omega2, tau1, tau2),
+        'x': vertcat(*[theta1, theta2, omega1, omega2, tau1, tau2]),
         'f': obj,
         'g': vertcat(*g)
     }
@@ -112,37 +169,43 @@ def optimize_trajectory(initial_state, target_state, l1, l2, m1, m2, num_steps, 
     # Bounds for the variables (adding torque and speed limits)
     lbx = []
     ubx = []
-    
+
     # No limits on theta1 and theta2 (full rotation allowed)
     lbx += [-np.inf] * (num_steps + 1)  # Lower bound for theta1
     ubx += [np.inf] * (num_steps + 1)   # Upper bound for theta1
     lbx += [-np.inf] * (num_steps + 1)  # Lower bound for theta2
     ubx += [np.inf] * (num_steps + 1)   # Upper bound for theta2
-    
+
     # Speed limits for omega1 and omega2
     lbx += [-max_speed] * (num_steps + 1)  # Lower bound for omega1
     ubx += [max_speed] * (num_steps + 1)   # Upper bound for omega1
     lbx += [-max_speed] * (num_steps + 1)  # Lower bound for omega2
     ubx += [max_speed] * (num_steps + 1)   # Upper bound for omega2
-    
+
     # Torque limits for tau1 and tau2
     lbx += [-max_torque] * num_steps  # Lower bound for tau1
     ubx += [max_torque] * num_steps   # Upper bound for tau1
     lbx += [-max_torque] * num_steps  # Lower bound for tau2
     ubx += [max_torque] * num_steps   # Upper bound for tau2
 
-    # Solve with SNOPT
+    # Convert the NumPy arrays to CasADi DM types
+    lbx_dm = DM(lbx)
+    ubx_dm = DM(ubx)
+    lbg_dm = DM(lbg)
+    ubg_dm = DM(ubg)
+    x0_dm = DM.zeros(nlp['x'].shape[0])
+
+    # Solve with SNOPT - using proper CasADi types
     solver = nlpsol('solver', 'snopt', nlp)
-    x0 = np.zeros(nlp['x'].shape[0])
-    result = solver(x0=x0, lbx=lbx, ubx=ubx, lbg=lbg, ubg=ubg)
+    result = solver(x0=x0_dm, lbx=lbx_dm, ubx=ubx_dm, lbg=lbg_dm, ubg=ubg_dm)
 
     # Extract results
-    theta1_opt = result['x'][:num_steps + 1].full().flatten()
-    theta2_opt = result['x'][num_steps + 1:2 * (num_steps + 1)].full().flatten()
-    omega1_opt = result['x'][2 * (num_steps + 1):3 * (num_steps + 1)].full().flatten()
-    omega2_opt = result['x'][3 * (num_steps + 1):4 * (num_steps + 1)].full().flatten()
-    tau1_opt = result['x'][4 * (num_steps + 1):4 * (num_steps + 1) + num_steps].full().flatten()
-    tau2_opt = result['x'][4 * (num_steps + 1) + num_steps:].full().flatten()
+    theta1_opt = np.array(result['x'][:num_steps + 1].full()).flatten()
+    theta2_opt = np.array(result['x'][num_steps + 1:2 * (num_steps + 1)].full()).flatten()
+    omega1_opt = np.array(result['x'][2 * (num_steps + 1):3 * (num_steps + 1)].full()).flatten()
+    omega2_opt = np.array(result['x'][3 * (num_steps + 1):4 * (num_steps + 1)].full()).flatten()
+    tau1_opt = np.array(result['x'][4 * (num_steps + 1):4 * (num_steps + 1) + num_steps].full()).flatten()
+    tau2_opt = np.array(result['x'][4 * (num_steps + 1) + num_steps:].full()).flatten()
 
     return theta1_opt, theta2_opt, omega1_opt, omega2_opt, tau1_opt, tau2_opt, times
 
@@ -181,6 +244,11 @@ def main():
     link2, = ax1.plot([], [], 'r-', linewidth=2)
     target_point, = ax1.plot([], [], 'ro', markersize=8)  # Red dot for target position
 
+    # List to store obstacles (x, y, radius)
+    obstacles = []
+    obstacle_circles = []  # To store the visual representation of obstacles
+    obstacle_radius = 0.5  # Default radius for obstacles
+
     # Initialize the angular velocity plot
     ax2.set_xlabel("Time")
     ax2.set_ylabel("Angular Velocity (rad/s)")
@@ -216,7 +284,7 @@ def main():
     vline_ax3 = ax3.axvline(x=0, color='r', linestyle='--')
 
     # Add sliders for time, link lengths, weights, torque limit, and speed limit
-    slider_y_positions = [0.85, 0.78, 0.71, 0.64, 0.57, 0.50, 0.43]
+    slider_y_positions = [0.85, 0.78, 0.71, 0.64, 0.57, 0.50, 0.43, 0.36]
     slider_width = 0.14
     slider_height = 0.03
     slider_x = 0.82
@@ -228,6 +296,7 @@ def main():
     ax_m2 = plt.axes([slider_x, slider_y_positions[4], slider_width, slider_height])
     ax_torque = plt.axes([slider_x, slider_y_positions[5], slider_width, slider_height])
     ax_speed = plt.axes([slider_x, slider_y_positions[6], slider_width, slider_height])
+    ax_obs_radius = plt.axes([slider_x, slider_y_positions[7], slider_width, slider_height])
 
     time_slider = Slider(ax_time, 'Time', 1, 20, valinit=total_time)
     l1_slider = Slider(ax_l1, 'L1', 1, 10, valinit=l1)
@@ -236,6 +305,7 @@ def main():
     m2_slider = Slider(ax_m2, 'M2', 0.1, 2, valinit=m2)
     torque_slider = Slider(ax_torque, 'Max Torque', 1, 20, valinit=max_torque)
     speed_slider = Slider(ax_speed, 'Max Speed', 1, 10, valinit=max_speed)
+    obs_radius_slider = Slider(ax_obs_radius, 'Obs Radius', 0.1, 2, valinit=obstacle_radius)
 
     # Store the target position and animation object
     target_x, target_y = None, None
@@ -296,51 +366,82 @@ def main():
 
     # Function to handle mouse clicks
     def on_click(event):
-        nonlocal target_x, target_y, initial_state
+        nonlocal target_x, target_y, initial_state, obstacles, obstacle_circles, obstacle_radius
         
         # Check if the click is within the animation axes
         if event.inaxes != ax1:
             return
             
+        # Right-click adds an obstacle
+        if event.button == 3:  # Right mouse button
+            obstacle_x, obstacle_y = event.xdata, event.ydata
+            current_radius = obs_radius_slider.val
+            
+            # Add obstacle to list
+            obstacles.append((obstacle_x, obstacle_y, current_radius))
+            print(f"Obstacle added at: ({obstacle_x:.2f}, {obstacle_y:.2f}) with radius {current_radius:.2f}")
+            
+            # Add visual representation of the obstacle
+            obstacle_circle = Circle((obstacle_x, obstacle_y), current_radius, fill=True, color='green', alpha=0.5)
+            ax1.add_patch(obstacle_circle)
+            obstacle_circles.append(obstacle_circle)
+            
+            # If we already have a target, recompute the trajectory with the new obstacle
+            if target_x is not None and target_y is not None:
+                try:
+                    recompute_trajectory()
+                except ValueError as e:
+                    print(f"Error computing trajectory with new obstacle: {e}")
+            
+            plt.draw()
+            return
+            
+        # Left-click sets the target position
         target_x, target_y = event.xdata, event.ydata
         print(f"Target position set to: ({target_x:.2f}, {target_y:.2f})")
 
         # Mark the target position with a red dot
         target_point.set_data([target_x], [target_y])
-
+        
         try:
-            # Get current parameter values
-            current_l1 = l1_slider.val
-            current_l2 = l2_slider.val
-            current_m1 = m1_slider.val
-            current_m2 = m2_slider.val
-            current_time = time_slider.val
-            current_max_torque = torque_slider.val
-            current_max_speed = speed_slider.val
-            
-            # Calculate inverse kinematics
-            (theta1_up, theta2_up), (theta1_down, theta2_down) = inverse_kinematics(target_x, target_y, current_l1, current_l2)
-            target_state = np.array([theta1_up, theta2_up, 0, 0])  # Target state (elbow-up solution)
-
-            # Optimize trajectory with current parameters
-            theta1_opt, theta2_opt, omega1_opt, omega2_opt, tau1_opt, tau2_opt, times = optimize_trajectory(
-                initial_state, target_state, current_l1, current_l2, current_m1, current_m2, 
-                num_steps, current_time, current_max_torque, current_max_speed
-            )
-
-            # Update the animation and plots
-            update_animation_and_plots(theta1_opt, theta2_opt, omega1_opt, omega2_opt, tau1_opt, tau2_opt, times, 
-                                       current_max_torque, current_max_speed)
-
-            # Update the initial state for the next trajectory
-            initial_state = np.array([theta1_opt[-1], theta2_opt[-1], omega1_opt[-1], omega2_opt[-1]])
-
+            # Compute trajectory
+            recompute_trajectory()
         except ValueError as e:
             print(f"Error: {e}")
 
+    # Function to recompute the trajectory with current parameters
+    def recompute_trajectory():
+        nonlocal initial_state
+        
+        # Get current parameter values
+        current_l1 = l1_slider.val
+        current_l2 = l2_slider.val
+        current_m1 = m1_slider.val
+        current_m2 = m2_slider.val
+        current_time = time_slider.val
+        current_max_torque = torque_slider.val
+        current_max_speed = speed_slider.val
+        
+        # Calculate inverse kinematics
+        (theta1_up, theta2_up), (theta1_down, theta2_down) = inverse_kinematics(target_x, target_y, current_l1, current_l2)
+        target_state = np.array([theta1_up, theta2_up, 0, 0])  # Target state (elbow-up solution)
+
+        # Optimize trajectory with current parameters and obstacles
+        theta1_opt, theta2_opt, omega1_opt, omega2_opt, tau1_opt, tau2_opt, times = optimize_trajectory(
+            initial_state, target_state, current_l1, current_l2, current_m1, current_m2, 
+            num_steps, current_time, current_max_torque, current_max_speed, obstacles
+        )
+
+        # Update the animation and plots
+        update_animation_and_plots(theta1_opt, theta2_opt, omega1_opt, omega2_opt, tau1_opt, tau2_opt, times, 
+                                   current_max_torque, current_max_speed)
+
+        # Update the initial state for the next trajectory
+        initial_state = np.array([theta1_opt[-1], theta2_opt[-1], omega1_opt[-1], omega2_opt[-1]])
+
     # Function to handle slider updates
     def update_sliders(val):
-        nonlocal l1, l2, m1, m2, total_time, max_torque, max_speed
+        nonlocal l1, l2, m1, m2, total_time, max_torque, max_speed, obstacle_radius
         l1 = l1_slider.val
         l2 = l2_slider.val
         m1 = m1_slider.val
@@ -348,25 +449,47 @@ def main():
         total_time = time_slider.val
         max_torque = torque_slider.val
         max_speed = speed_slider.val
+        obstacle_radius = obs_radius_slider.val
+        
+        # Update obstacle sizes if the radius slider changed
+        if val is obs_radius_slider:
+            for i, (obs_x, obs_y, _) in enumerate(obstacles):
+                obstacles[i] = (obs_x, obs_y, obstacle_radius)
+                obstacle_circles[i].set_radius(obstacle_radius)
+            plt.draw()
 
         # Re-run the optimization and update the animation
         if target_x is not None and target_y is not None:
             try:
-                # Calculate inverse kinematics
-                (theta1_up, theta2_up), (theta1_down, theta2_down) = inverse_kinematics(target_x, target_y, l1, l2)
-                target_state = np.array([theta1_up, theta2_up, 0, 0])  # Target state (elbow-up solution)
-
-                # Optimize trajectory
-                theta1_opt, theta2_opt, omega1_opt, omega2_opt, tau1_opt, tau2_opt, times = optimize_trajectory(
-                    initial_state, target_state, l1, l2, m1, m2, num_steps, total_time, max_torque, max_speed
-                )
-
-                # Update the animation and plots
-                update_animation_and_plots(theta1_opt, theta2_opt, omega1_opt, omega2_opt, tau1_opt, tau2_opt, times, 
-                                          max_torque, max_speed)
-
+                recompute_trajectory()
             except ValueError as e:
                 print(f"Error: {e}")
+
+    # Function to clear all obstacles
+    def clear_obstacles(event):
+        nonlocal obstacles, obstacle_circles
+        
+        # Clear obstacle list
+        obstacles.clear()
+        
+        # Remove obstacle visualizations
+        for circle in obstacle_circles:
+            circle.remove()
+        obstacle_circles.clear()
+        
+        plt.draw()
+        
+        # Recompute trajectory if we have a target
+        if target_x is not None and target_y is not None:
+            try:
+                recompute_trajectory()
+            except ValueError as e:
+                print(f"Error: {e}")
+
+    # Add a button to clear obstacles
+    ax_clear = plt.axes([slider_x, slider_y_positions[7] - 0.07, slider_width, slider_height])
+    clear_button = plt.Button(ax_clear, 'Clear Obstacles')
+    clear_button.on_clicked(clear_obstacles)
 
     # Connect the sliders to the update function
     l1_slider.on_changed(update_sliders)
@@ -376,9 +499,10 @@ def main():
     time_slider.on_changed(update_sliders)
     torque_slider.on_changed(update_sliders)
     speed_slider.on_changed(update_sliders)
+    obs_radius_slider.on_changed(update_sliders)
 
-    # Add a text instruction on the figure
-    plt.figtext(0.5, 0.95, "Click in the plot to set a target position for the robot arm", 
+    # Add text instructions on the figure
+    plt.figtext(0.5, 0.97, "Left-click to set target position | Right-click to add obstacle", 
                 ha="center", fontsize=12, bbox=dict(facecolor='white', alpha=0.7))
 
     # Connect the click event to the handler

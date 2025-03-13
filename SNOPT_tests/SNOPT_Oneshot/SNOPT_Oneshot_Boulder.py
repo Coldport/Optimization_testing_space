@@ -129,7 +129,7 @@ def main():
     # Define parameters
     num_steps = 100  # Number of time steps
     total_time = 1.0  # Total time duration
-    target_position = 10.0  # Target position
+    target_position = 1.0  # Target position
     mass = 10.0  # Mass of the boulder (kg)
     friction_coefficient = 0.1  # Coefficient of friction
     initial_state = np.array([0, 0])  # Initial state: [0, 0] (position 0, velocity 0)

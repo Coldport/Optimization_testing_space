@@ -1,5 +1,9 @@
 from casadi import *
+'''
+Solve a simple optimization problem using SNOPT.
+use this file to test if SNOPT is installed correctly.
 
+'''
 # Define variables
 x = MX.sym('x')
 y = MX.sym('y')
@@ -23,5 +27,3 @@ result = solver(x0=[1.0, 1.0], lbg=[0], ubg=[0])
 print("Optimal solution:")
 print(result['x'])
 
-git config --global user.email "you@example.com"
-  git config --global user.name "Your Name"
