@@ -2,7 +2,7 @@
 
 ## to use this you will need to have SNOPT set up on your system. details on that can be found on the snopt website.
 
-get a licinse from here.
+get a license from here.
 
 https://ccom.ucsd.edu/~optimizers/licensing/
 
