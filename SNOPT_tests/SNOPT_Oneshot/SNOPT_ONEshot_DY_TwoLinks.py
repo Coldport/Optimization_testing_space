@@ -1,6 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from casadi import MX, vertcat, nlpsol, sqrt, fmax, fmin, if_else, DM, sum1, horzsplit
+from casadi import MX, vertcat, nlpsol, sqrt, fmax, fmin, if_else, DM, sum1, horzsplit, fabs
 from matplotlib.animation import FuncAnimation
 from matplotlib.widgets import Slider
 from matplotlib.patches import Circle
@@ -16,7 +16,7 @@ def forward_kinematics(theta1, theta2, l1, l2):
 # Inverse Kinematics
 def inverse_kinematics(x, y, l1, l2):
     d = np.sqrt(x**2 + y**2)
-    if d > l1 + l2 or d < np.abs(l1 - l2):
+    if d > l1 + l2 or d < fabs(l1 - l2):
         raise ValueError("Target position is out of reach")
     
     cos_theta2 = (x**2 + y**2 - l1**2 - l2**2) / (2 * l1 * l2)
@@ -76,6 +76,7 @@ def optimize_trajectory(initial_state, target_state, l1, l2, m1, m2, num_steps, 
     tau1 = MX.sym('tau1', num_steps)
     tau2 = MX.sym('tau2', num_steps)
 
+    # Objective: minimize time and control effort
     obj = total_time + 0.1 * (sum1(tau1**2) + sum1(tau2**2)) / num_steps
 
     g = []
@@ -83,17 +84,19 @@ def optimize_trajectory(initial_state, target_state, l1, l2, m1, m2, num_steps, 
     ubg = []
 
     # Initial state constraints
-    g += [theta1[0], theta2[0], omega1[0], omega2[0]]
-    lbg += list(initial_state)
-    ubg += list(initial_state)
+    g += [theta1[0] - initial_state[0],
+          theta2[0] - initial_state[1],
+          omega1[0] - initial_state[2],
+          omega2[0] - initial_state[3]]
+    lbg += [0, 0, 0, 0]
+    ubg += [0, 0, 0, 0]
 
-    # Dynamics constraints - keep as symbolic expressions
+    # Dynamics constraints
     for i in range(num_steps):
         state = vertcat(theta1[i], theta2[i], omega1[i], omega2[i])
         control = vertcat(tau1[i], tau2[i])
         state_next = state + robot_dynamics(state, control, l1, l2, m1, m2) * dt
         
-        # Add equality constraints directly
         g += [theta1[i+1] - state_next[0],
               theta2[i+1] - state_next[1],
               omega1[i+1] - state_next[2],
@@ -102,12 +105,15 @@ def optimize_trajectory(initial_state, target_state, l1, l2, m1, m2, num_steps, 
         ubg += [0, 0, 0, 0]
 
     # Final state constraints
-    g += [theta1[-1], theta2[-1], omega1[-1], omega2[-1]]
-    lbg += list(target_state)
-    ubg += list(target_state)
+    g += [theta1[-1] - target_state[0],
+          theta2[-1] - target_state[1],
+          omega1[-1] - target_state[2],
+          omega2[-1] - target_state[3]]
+    lbg += [0, 0, 0, 0]
+    ubg += [0, 0, 0, 0]
 
     # Obstacle avoidance
-    min_distance = 0.2
+    min_distance = 0.1
     for i in range(num_steps + 1):
         x1 = l1 * MX.cos(theta1[i])
         y1 = l1 * MX.sin(theta1[i])
@@ -127,10 +133,10 @@ def optimize_trajectory(initial_state, target_state, l1, l2, m1, m2, num_steps, 
     ubx = [max_time/num_steps]  # dt upper bound
     
     # Add bounds for other variables
-    lbx += [-np.inf]*(num_steps + 1)  # theta1
-    ubx += [np.inf]*(num_steps + 1)
-    lbx += [-np.inf]*(num_steps + 1)  # theta2
-    ubx += [np.inf]*(num_steps + 1)
+    lbx += [-2*np.pi]*(num_steps + 1)  # theta1
+    ubx += [2*np.pi]*(num_steps + 1)
+    lbx += [-2*np.pi]*(num_steps + 1)  # theta2
+    ubx += [2*np.pi]*(num_steps + 1)
     lbx += [-max_speed]*(num_steps + 1)  # omega1
     ubx += [max_speed]*(num_steps + 1)
     lbx += [-max_speed]*(num_steps + 1)  # omega2
@@ -163,7 +169,19 @@ def optimize_trajectory(initial_state, target_state, l1, l2, m1, m2, num_steps, 
     ubg_dm = DM(ubg)
     x0_dm = DM(x0)
 
-    solver = nlpsol('solver', 'ipopt', nlp)
+    # Use SNOPT solver
+    opts = {
+        'expand': True,
+        'ipopt.max_iter': 3000,
+        'ipopt.tol': 1e-6,
+        'ipopt.print_level': 0,
+        'print_time': 0,
+        'ipopt.acceptable_tol': 1e-4,
+        'ipopt.acceptable_obj_change_tol': 1e-4
+    }
+    
+    solver = nlpsol('solver', 'snopt', nlp, opts)
+    
     result = solver(
         x0=x0_dm,
         lbx=lbx_dm,
@@ -217,6 +235,7 @@ def main():
     link1, = ax1.plot([], [], 'b-', linewidth=2)
     link2, = ax1.plot([], [], 'r-', linewidth=2)
     target_point, = ax1.plot([], [], 'ro', markersize=8)
+    start_point, = ax1.plot([], [], 'go', markersize=8)
 
     obstacles = []
     obstacle_circles = []
@@ -311,12 +330,12 @@ def main():
         plt.draw()
 
     def on_click(event):
-        nonlocal target_x, target_y, obstacle_radius
+        nonlocal target_x, target_y, initial_state
         
         if event.inaxes != ax1:
             return
             
-        if event.button == 3:  # Right mouse button
+        if event.button == 3:  # Right mouse button for obstacles
             obstacle_x, obstacle_y = event.xdata, event.ydata
             current_radius = obs_radius_slider.val
             
@@ -334,6 +353,20 @@ def main():
                     print(f"Error computing trajectory with new obstacle: {e}")
             
             plt.draw()
+            return
+        
+        if event.button == 2:  # Middle mouse button for start position
+            start_x, start_y = event.xdata, event.ydata
+            try:
+                (theta1_start, theta2_start), _ = inverse_kinematics(start_x, start_y, l1_slider.val, l2_slider.val)
+                initial_state = np.array([theta1_start, theta2_start, 0, 0])
+                start_point.set_data([start_x], [start_y])
+                print(f"Start position set to: ({start_x:.2f}, {start_y:.2f})")
+                
+                if target_x is not None and target_y is not None:
+                    recompute_trajectory()
+            except ValueError as e:
+                print(f"Error setting start position: {e}")
             return
             
         target_x, target_y = event.xdata, event.ydata
@@ -404,7 +437,7 @@ def main():
     speed_slider.on_changed(update_sliders)
     obs_radius_slider.on_changed(update_sliders)
 
-    plt.figtext(0.5, 0.97, "Left-click to set target position | Right-click to add obstacle", 
+    plt.figtext(0.5, 0.97, "Left-click: set target | Middle-click: set start | Right-click: add obstacle", 
                 ha="center", fontsize=12, bbox=dict(facecolor='white', alpha=0.7))
 
     fig.canvas.mpl_connect('button_press_event', on_click)
