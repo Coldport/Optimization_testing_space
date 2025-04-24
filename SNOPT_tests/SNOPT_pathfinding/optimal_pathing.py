@@ -1,6 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from casadi import MX, vertcat, nlpsol, sqrt, fmax, fmin, if_else, DM, sum1, horzsplit, fabs
+from casadi import MX, vertcat, nlpsol, sqrt, fmax, fmin, if_else, DM, sum1, horzsplit, fabs, exp
 from matplotlib.animation import FuncAnimation
 from matplotlib.widgets import Slider, TextBox, Button
 from matplotlib.patches import Circle, Rectangle
@@ -18,6 +18,8 @@ class Obstacle:
         return (abs(x - self.x) < self.width/2) and (abs(y - self.y) < self.height/2)
 
 def optimize_trajectory(initial_state, target_state, obstacles, radius, num_steps, max_time, max_accel, max_speed, boundary):
+    eps = 1e-6  # Small positive number to prevent division by zero
+    
     dt = MX.sym('dt')
     total_time = dt * num_steps
 
@@ -29,8 +31,31 @@ def optimize_trajectory(initial_state, target_state, obstacles, radius, num_step
     ax = MX.sym('ax', num_steps)
     ay = MX.sym('ay', num_steps)
 
+<<<<<<< HEAD
     # Base cost: time + control effort
     obj = total_time + 0.1 * (sum1(ax**2) + 0.1 * (sum1(ay**2)) )/ num_steps
+=======
+    # Objective: Minimize control effort and obstacle proximity only
+    # Remove total_time from objective since we'll constrain it instead
+    obj = sum1(ax**2 + ay**2) / num_steps
+
+    # Add obstacle avoidance to objective
+    obstacle_weight = 5.0
+    for i in range(num_steps + 1):
+        for obs in obstacles:
+            dx = x[i] - obs.x
+            dy = y[i] - obs.y
+            
+            # Calculate distance to rectangle edges
+            dx_dist = fmax(fabs(dx) - obs.width/2, 0)
+            dy_dist = fmax(fabs(dy) - obs.height/2, 0)
+            
+            # Distance to obstacle
+            dist = sqrt(dx_dist*dx_dist + dy_dist*dy_dist + eps)
+            
+            # Penalty function
+            obj += obstacle_weight / (dist + eps)
+>>>>>>> 353f5be085b753e0112faa783cbda7a399478f71
 
     # 1. GOAL ATTRACTION (soft guidance)
     lambda_goal = 0.5
@@ -68,7 +93,16 @@ def optimize_trajectory(initial_state, target_state, obstacles, radius, num_step
     lbg = []
     ubg = []
 
+<<<<<<< HEAD
     # Initial state
+=======
+    # Time constraint - ensure total time is less than or equal to max_time
+    g += [total_time]
+    lbg += [0]  # Time must be positive
+    ubg += [max_time]  # Time must not exceed max_time
+
+    # Initial state constraints
+>>>>>>> 353f5be085b753e0112faa783cbda7a399478f71
     g += [x[0], y[0], vx[0], vy[0]]
     lbg += list(initial_state)
     ubg += list(initial_state)
@@ -99,11 +133,26 @@ def optimize_trajectory(initial_state, target_state, obstacles, radius, num_step
         for obs in obstacles:
             dx = x[i] - obs.x
             dy = y[i] - obs.y
+<<<<<<< HEAD
             dist_x = fmax(fabs(dx) - obs.width/2, 0)
             dist_y = fmax(fabs(dy) - obs.height/2, 0)
             min_dist = sqrt(dist_x**2 + dist_y**2 + 1e-6)
             g += [min_dist - safety_margin]
             lbg += [0]
+=======
+            
+            # Calculate distance to rectangle edges
+            dx_dist = fmax(fabs(dx) - obs.width/2, 0)
+            dy_dist = fmax(fabs(dy) - obs.height/2, 0)
+            
+            # Distance to obstacle
+            dist = sqrt(dx_dist*dx_dist + dy_dist*dy_dist + eps)
+            
+            # Safety margin
+            safety_margin = radius * 1.5  # Reduced from 2.5 to prevent over-constraint
+            g += [dist - safety_margin]
+            lbg += [0]  # Removed minimum clearance requirement
+>>>>>>> 353f5be085b753e0112faa783cbda7a399478f71
             ubg += [np.inf]
 
     # Boundary constraints
@@ -116,6 +165,7 @@ def optimize_trajectory(initial_state, target_state, obstacles, radius, num_step
         lbg += [0, 0, 0, 0]
         ubg += [np.inf, np.inf, np.inf, np.inf]
 
+<<<<<<< HEAD
     # Variable bounds (same as before)
     lbx = [0.001] + [boundary[0]+radius]*(num_steps+1) + [boundary[2]+radius]*(num_steps+1) + [-max_speed]*(2*(num_steps+1)) + [-max_accel]*(2*num_steps)
     ubx = [max_time/num_steps] + [boundary[1]-radius]*(num_steps+1) + [boundary[3]-radius]*(num_steps+1) + [max_speed]*(2*(num_steps+1)) + [max_accel]*(2*num_steps)
@@ -134,12 +184,53 @@ def optimize_trajectory(initial_state, target_state, obstacles, radius, num_step
         x0 += [vel_scale * max_speed * dx/dist, 
                vel_scale * max_speed * dy/dist]
     x0 += [0]*(2*num_steps)
+=======
+    # Variable bounds
+    lbx = [0.001]  # dt lower bound - ensure positive time step
+    ubx = [max_time/num_steps]  # dt upper bound - ensure we can meet max_time constraint
+    
+    # Add bounds for other variables
+    margin = 1e-6
+    lbx += [boundary[0] + radius + margin] * (num_steps + 1)  # x
+    ubx += [boundary[1] - radius - margin] * (num_steps + 1)
+    lbx += [boundary[2] + radius + margin] * (num_steps + 1)  # y
+    ubx += [boundary[3] - radius - margin] * (num_steps + 1)
+    lbx += [-max_speed] * (num_steps + 1)  # vx
+    ubx += [max_speed] * (num_steps + 1)
+    lbx += [-max_speed] * (num_steps + 1)  # vy
+    ubx += [max_speed] * (num_steps + 1)
+    lbx += [-max_accel] * num_steps  # ax
+    ubx += [max_accel] * num_steps
+    lbx += [-max_accel] * num_steps  # ay
+    ubx += [max_accel] * num_steps
+
+    # Initial guess - modify to use max_time/2 as initial guess
+    x0 = [max_time/(2*num_steps)]  # dt - start with half of max allowed time
+    for i in range(num_steps + 1):
+        t = i/num_steps
+        s = 0.5 * (1 - np.cos(np.pi * t))
+        x0 += [initial_state[0] * (1-s) + target_state[0] * s]  # x
+        x0 += [initial_state[1] * (1-s) + target_state[1] * s]  # y
+        
+        vel_scale = 4 * t * (1-t)
+        dx = target_state[0] - initial_state[0]
+        dy = target_state[1] - initial_state[1]
+        dist = np.sqrt(dx*dx + dy*dy)
+        if dist > 0:
+            x0 += [vel_scale * max_speed * dx/dist]  # vx
+            x0 += [vel_scale * max_speed * dy/dist]  # vy
+        else:
+            x0 += [0, 0]
+    
+    x0 += [0] * (2 * num_steps)  # ax, ay
+>>>>>>> 353f5be085b753e0112faa783cbda7a399478f71
 
     # Solve NLP (same as before)
     nlp = {'x': vertcat(dt, x, y, vx, vy, ax, ay), 'f': obj, 'g': vertcat(*g)}
     solver = nlpsol('solver', 'snopt', nlp)
     result = solver(x0=DM(x0), lbx=DM(lbx), ubx=DM(ubx), lbg=DM(lbg), ubg=DM(ubg))
 
+<<<<<<< HEAD
     # Extract and return results (same as before)
     return (
         np.array(result['x'][1:num_steps+2]).flatten(),
@@ -149,6 +240,29 @@ def optimize_trajectory(initial_state, target_state, obstacles, radius, num_step
         np.array(result['x'][4*num_steps+5:4*num_steps+5+num_steps]).flatten(),
         np.array(result['x'][4*num_steps+5+num_steps:]).flatten(),
         np.linspace(0, float(result['x'][0])*num_steps, num_steps + 1)
+=======
+    # Solver options - increase iterations since we've added a time constraint
+    opts = {
+        'ipopt': {
+            'tol': 1e-6,
+            'max_iter': 5000,  # Increased iterations
+            'print_level': 0,
+            'acceptable_tol': 1e-4,
+            'hessian_approximation': 'limited-memory'
+        }
+    }
+
+    # Create solver
+    solver = nlpsol('solver', 'ipopt', nlp, opts)
+
+    # Solve the NLP
+    result = solver(
+        x0=DM(x0),
+        lbx=DM(lbx),
+        ubx=DM(ubx),
+        lbg=DM(lbg),
+        ubg=DM(ubg)
+>>>>>>> 353f5be085b753e0112faa783cbda7a399478f71
     )
 
 def main():
