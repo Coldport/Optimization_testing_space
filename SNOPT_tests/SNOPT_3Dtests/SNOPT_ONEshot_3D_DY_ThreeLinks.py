@@ -265,7 +265,7 @@ def main():
     m1 = 0.1  # Small mass for first link
     m2 = 0.5
     m3 = 0.5
-    num_steps = 300
+    num_steps = 100
     max_time = 40.0
     max_torque = 100.0
     max_speed = 20.0

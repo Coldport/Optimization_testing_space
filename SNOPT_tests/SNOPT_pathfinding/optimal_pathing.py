@@ -21,35 +21,66 @@ def optimize_trajectory(initial_state, target_state, obstacles, radius, num_step
     dt = MX.sym('dt')
     total_time = dt * num_steps
 
-    # State variables: [x, y, vx, vy]
+    # State and control variables (same as before)
     x = MX.sym('x', num_steps + 1)
     y = MX.sym('y', num_steps + 1)
     vx = MX.sym('vx', num_steps + 1)
     vy = MX.sym('vy', num_steps + 1)
-    
-    # Control variables: [ax, ay]
     ax = MX.sym('ax', num_steps)
     ay = MX.sym('ay', num_steps)
 
-    # Objective: minimize time and control effort
-    obj = total_time + 0.1 * (sum1(ax**2) + 0.1 * (sum1(ay**2))) / num_steps
+    # Base cost: time + control effort
+    obj = total_time + 0.1 * (sum1(ax**2) + 0.1 * (sum1(ay**2)) )/ num_steps
 
-    # Constraints
+    # 1. GOAL ATTRACTION (soft guidance)
+    lambda_goal = 0.5
+    for k in range(num_steps + 1):
+        dist_to_goal = sqrt((x[k] - target_state[0])**2 + (y[k] - target_state[1])**2 + 1e-6)
+        obj += lambda_goal * dist_to_goal**2 / num_steps
+
+    # 2. OBSTACLE PENALTY (NEW: Hard penalty for collision)
+    penalty_scale = 3e6  # Very large penalty for touching obstacles
+    for k in range(num_steps + 1):
+        for obs in obstacles:
+            # Calculate penetration depth
+            dx = x[k] - obs.x
+            dy = y[k] - obs.y
+            penetration_x = fmax(obs.width/2 - fabs(dx), 0)
+            penetration_y = fmax(obs.height/2 - fabs(dy), 0)
+            
+            # Apply penalty only if penetration occurs
+            if_penetrating = if_else(penetration_x > 0, 1, 0) * if_else(penetration_y > 0, 1, 0)
+            obj += penalty_scale * if_penetrating * (penetration_x**2 + penetration_y**2)
+
+    # 3. OBSTACLE REPULSION (soft avoidance)
+    lambda_obs = 1.0
+    for k in range(num_steps + 1):
+        for obs in obstacles:
+            dx = x[k] - obs.x
+            dy = y[k] - obs.y
+            dist_x = fmax(fabs(dx) - obs.width/2, 1e-3)
+            dist_y = fmax(fabs(dy) - obs.height/2, 1e-3)
+            dist_to_obs = sqrt(dist_x**2 + dist_y**2 + 1e-6)
+            obj += lambda_obs / (dist_to_obs**2 + 1e-3)
+
+    # CONSTRAINTS (same as before)
     g = []
     lbg = []
     ubg = []
 
-    # Initial state constraints
+    # Initial state
     g += [x[0], y[0], vx[0], vy[0]]
     lbg += list(initial_state)
     ubg += list(initial_state)
 
-    # Dynamics constraints (simple double integrator)
+    # Dynamics
     for i in range(num_steps):
-        state = vertcat(x[i], y[i], vx[i], vy[i])
-        control = vertcat(ax[i], ay[i])
-        state_next = state + vertcat(vx[i], vy[i], ax[i], ay[i]) * dt
-        
+        state_next = vertcat(
+            x[i] + vx[i] * dt,
+            y[i] + vy[i] * dt,
+            vx[i] + ax[i] * dt,
+            vy[i] + ay[i] * dt
+        )
         g += [x[i+1] - state_next[0],
               y[i+1] - state_next[1],
               vx[i+1] - state_next[2],
@@ -57,147 +88,68 @@ def optimize_trajectory(initial_state, target_state, obstacles, radius, num_step
         lbg += [0, 0, 0, 0]
         ubg += [0, 0, 0, 0]
 
-    # Final state constraints
+    # Final state
     g += [x[-1], y[-1], vx[-1], vy[-1]]
     lbg += list(target_state)
     ubg += list(target_state)
 
-    # Obstacle avoidance constraints
+    # HARD OBSTACLE CONSTRAINTS (NEW: Strict no-penetration)
+    safety_margin = radius * 1.2  # Extra buffer
     for i in range(num_steps + 1):
         for obs in obstacles:
-            # Calculate signed distance to obstacle
             dx = x[i] - obs.x
             dy = y[i] - obs.y
-            
-            # Use smooth approximations for better numerical stability
-            eps = 1e-3  # Small positive number to prevent division by zero
-            
-            # Smooth absolute value approximation
-            abs_dx = sqrt(dx*dx + eps)
-            abs_dy = sqrt(dy*dy + eps)
-            
-            # Smooth maximum approximation
-            dist_x = fmax(abs_dx - obs.width/2, eps)
-            dist_y = fmax(abs_dy - obs.height/2, eps)
-            
-            # Smooth distance calculation
-            min_dist = sqrt(dist_x*dist_x + dist_y*dist_y + eps)
-            
-            # Add constraint to stay outside obstacle with safety margin
-            g += [min_dist - radius]
+            dist_x = fmax(fabs(dx) - obs.width/2, 0)
+            dist_y = fmax(fabs(dy) - obs.height/2, 0)
+            min_dist = sqrt(dist_x**2 + dist_y**2 + 1e-6)
+            g += [min_dist - safety_margin]
             lbg += [0]
             ubg += [np.inf]
 
-    # Boundary constraints with smooth approximations
+    # Boundary constraints
     for i in range(num_steps + 1):
-        # Add small eps to prevent exactly hitting the boundary
         eps_bound = 1e-2
-        g += [x[i] - (boundary[0] + radius + eps_bound),  # Left boundary
-              boundary[1] - radius - eps_bound - x[i],    # Right boundary
-              y[i] - (boundary[2] + radius + eps_bound),  # Bottom boundary
-              boundary[3] - radius - eps_bound - y[i]]    # Top boundary
+        g += [x[i] - (boundary[0] + radius + eps_bound),
+              boundary[1] - radius - eps_bound - x[i],
+              y[i] - (boundary[2] + radius + eps_bound),
+              boundary[3] - radius - eps_bound - y[i]]
         lbg += [0, 0, 0, 0]
         ubg += [np.inf, np.inf, np.inf, np.inf]
 
-    # Variable bounds
-    lbx = [0.001]  # dt lower bound
-    ubx = [max_time/num_steps]  # dt upper bound
-    
-    # Add bounds for other variables with small margins
-    margin = 1e-6
-    lbx += [boundary[0] + radius + margin] * (num_steps + 1)  # x
-    ubx += [boundary[1] - radius - margin] * (num_steps + 1)
-    lbx += [boundary[2] + radius + margin] * (num_steps + 1)  # y
-    ubx += [boundary[3] - radius - margin] * (num_steps + 1)
-    lbx += [-max_speed] * (num_steps + 1)  # vx
-    ubx += [max_speed] * (num_steps + 1)
-    lbx += [-max_speed] * (num_steps + 1)  # vy
-    ubx += [max_speed] * (num_steps + 1)
-    lbx += [-max_accel] * num_steps  # ax
-    ubx += [max_accel] * num_steps
-    lbx += [-max_accel] * num_steps  # ay
-    ubx += [max_accel] * num_steps
+    # Variable bounds (same as before)
+    lbx = [0.001] + [boundary[0]+radius]*(num_steps+1) + [boundary[2]+radius]*(num_steps+1) + [-max_speed]*(2*(num_steps+1)) + [-max_accel]*(2*num_steps)
+    ubx = [max_time/num_steps] + [boundary[1]-radius]*(num_steps+1) + [boundary[3]-radius]*(num_steps+1) + [max_speed]*(2*(num_steps+1)) + [max_accel]*(2*num_steps)
 
-    # Initial guess - linear interpolation with smooth velocity profile
-    x0 = [max_time/num_steps/2]  # dt
+    # Initial guess (same as before)
+    x0 = [max_time/num_steps/2]
     for i in range(num_steps + 1):
         t = i/num_steps
-        # Smooth acceleration and deceleration
-        s = 0.5 * (1 - np.cos(np.pi * t))  # Smooth interpolation parameter
-        x0 += [initial_state[0] * (1-s) + target_state[0] * s]  # x
-        x0 += [initial_state[1] * (1-s) + target_state[1] * s]  # y
-        
-        # Velocity profile that smoothly accelerates and decelerates
-        vel_scale = 4 * t * (1-t)  # Peak at t=0.5
+        s = 0.5 * (1 - np.cos(np.pi * t))
+        x0 += [initial_state[0]*(1-s) + target_state[0]*s, 
+               initial_state[1]*(1-s) + target_state[1]*s]
+        vel_scale = 4 * t * (1-t)
         dx = target_state[0] - initial_state[0]
         dy = target_state[1] - initial_state[1]
-        dist = np.sqrt(dx*dx + dy*dy)
-        if dist > 0:
-            x0 += [vel_scale * max_speed * dx/dist]  # vx
-            x0 += [vel_scale * max_speed * dy/dist]  # vy
-        else:
-            x0 += [0, 0]  # vx, vy
-    
-    # Initial accelerations
-    x0 += [0] * (2 * num_steps)  # ax, ay
+        dist = sqrt(dx**2 + dy**2 + 1e-6)
+        x0 += [vel_scale * max_speed * dx/dist, 
+               vel_scale * max_speed * dy/dist]
+    x0 += [0]*(2*num_steps)
 
-    # NLP problem
-    nlp = {
-        'x': vertcat(dt, x, y, vx, vy, ax, ay),
-        'f': obj,
-        'g': vertcat(*g)
-    }
+    # Solve NLP (same as before)
+    nlp = {'x': vertcat(dt, x, y, vx, vy, ax, ay), 'f': obj, 'g': vertcat(*g)}
+    solver = nlpsol('solver', 'snopt', nlp)
+    result = solver(x0=DM(x0), lbx=DM(lbx), ubx=DM(ubx), lbg=DM(lbg), ubg=DM(ubg))
 
-    # SNOPT options with more robust settings
-    opts = {
-        'snopt': {
-            'Major feasibility tolerance': 1e-6,
-            'Major optimality tolerance': 1e-6,
-            'Minor feasibility tolerance': 1e-6,
-            'Verify level': 3,
-            'Scale option': 2,
-            'Scale tolerance': 0.9,
-            'Linesearch tolerance': 0.95,
-            'Major iterations limit': 1000,
-            'Minor iterations limit': 500,
-            'Iterations limit': 10000,
-            'Major step limit': 2.0,
-            'Penalty parameter': 1.0,
-            'Print file': 0,
-            'Summary file': 0,
-            'System information': 'No',
-            'Print level': 1,
-            'Major print level': 0,
-            'Minor print level': 0
-        },
-        'print_time': False,
-        'error_on_fail': False
-    }
-
-    # Create solver with SNOPT
-    solver = nlpsol('solver', 'snopt', nlp, opts)
-
-    # Solve the NLP
-    result = solver(
-        x0=DM(x0),
-        lbx=DM(lbx),
-        ubx=DM(ubx),
-        lbg=DM(lbg),
-        ubg=DM(ubg)
+    # Extract and return results (same as before)
+    return (
+        np.array(result['x'][1:num_steps+2]).flatten(),
+        np.array(result['x'][num_steps+2:2*num_steps+3]).flatten(),
+        np.array(result['x'][2*num_steps+3:3*num_steps+4]).flatten(),
+        np.array(result['x'][3*num_steps+4:4*num_steps+5]).flatten(),
+        np.array(result['x'][4*num_steps+5:4*num_steps+5+num_steps]).flatten(),
+        np.array(result['x'][4*num_steps+5+num_steps:]).flatten(),
+        np.linspace(0, float(result['x'][0])*num_steps, num_steps + 1)
     )
-
-    # Extract results
-    dt_opt = float(result['x'][0])
-    total_time = dt_opt * num_steps
-    x_opt = np.array(result['x'][1:num_steps+2]).flatten()
-    y_opt = np.array(result['x'][num_steps+2:2*(num_steps+1)+1]).flatten()
-    vx_opt = np.array(result['x'][2*(num_steps+1)+1:3*(num_steps+1)+1]).flatten()
-    vy_opt = np.array(result['x'][3*(num_steps+1)+1:4*(num_steps+1)+1]).flatten()
-    ax_opt = np.array(result['x'][4*(num_steps+1)+1:4*(num_steps+1)+1+num_steps]).flatten()
-    ay_opt = np.array(result['x'][4*(num_steps+1)+1+num_steps:]).flatten()
-    times = np.linspace(0, total_time, num_steps + 1)
-
-    return x_opt, y_opt, vx_opt, vy_opt, ax_opt, ay_opt, times
 
 def main():
     # Simulation parameters

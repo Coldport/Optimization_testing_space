@@ -1,0 +1,17 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+
+# Your rule content
+
+- You can @ files here
+- You can use markdown but dont have to
+
+##sacred rules.
+
+- allways update the req file
+- only generate the changed code part to save on bandwidth.
+- any change has to also change the readme file so that everything is documented.
+- if there is any instalation instructions they should be in the wiki or the readme or both
