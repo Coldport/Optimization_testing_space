@@ -157,7 +157,7 @@ def main():
     m1 = 0.5
     m2 = 0.5
     num_steps = 50
-    total_time = 30.0
+    total_time = 300.0
     max_force = 100.0  # Default maximum force (N)
     max_torque = 1000.0  # Default maximum torque (Nm)
     max_speed = 500.0    # Default maximum speed (m/s and rad/s)
@@ -246,7 +246,7 @@ def main():
     ax_torque = plt.axes([slider_x, slider_y_positions[6], slider_width, slider_height])
     ax_speed = plt.axes([slider_x, slider_y_positions[7], slider_width, slider_height])
 
-    time_slider = Slider(ax_time, 'Time', 1, 20, valinit=total_time)
+    time_slider = Slider(ax_time, 'Time', 1, 30, valinit=total_time)
     l1_slider = Slider(ax_l1, 'L1', 1, 10, valinit=l1)
     l2_slider = Slider(ax_l2, 'L2', 1, 10, valinit=l2)
     m1_slider = Slider(ax_m1, 'M1', 0.1, 2, valinit=m1)

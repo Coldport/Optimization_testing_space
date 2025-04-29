@@ -173,13 +173,13 @@ def plot_results(times, omega1, omega2, tau1, tau2):
 # Main function
 def main():
     # User inputs
-    l1 = 1.5
+    l1 = 5
     l2 = 1.5
     m1 = 0.5
     m2 = 1.0
     target_x = float(input("Enter the target x position: "))
     target_y = float(input("Enter the target y position: "))
-    num_steps = 100
+    num_steps = 900
     total_time = 10.0
 
     # Calculate inverse kinematics
