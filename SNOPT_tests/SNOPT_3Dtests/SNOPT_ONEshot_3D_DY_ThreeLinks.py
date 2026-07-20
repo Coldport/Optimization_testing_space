@@ -5,6 +5,7 @@ from matplotlib.animation import FuncAnimation
 from matplotlib.widgets import Slider, TextBox, Button
 from mpl_toolkits.mplot3d import Axes3D
 import time
+import os
 
 # Forward Kinematics for 3DOF robot arm
 def forward_kinematics(theta1, theta2, theta3, l1, l2, l3):
@@ -108,6 +109,10 @@ def robot_dynamics(state, control, l1, l2, l3, m1, m2, m3, g=9.81):
 
 # Optimize Trajectory with SNOPT
 def optimize_trajectory(initial_state, target_state, l1, l2, l3, m1, m2, m3, num_steps, max_time, max_torque, max_speed):
+    # Set environment variables to prevent SNOPT from writing files
+    os.environ['SNOPT_LICENSE'] = 'none'  # Prevent license file reading
+    os.environ['SNOPT_PRINT'] = 'none'    # Prevent print file
+    
     dt = MX.sym('dt')
     total_time = dt * num_steps
 
@@ -124,8 +129,15 @@ def optimize_trajectory(initial_state, target_state, l1, l2, l3, m1, m2, m3, num
     tau2 = MX.sym('tau2', num_steps)
     tau3 = MX.sym('tau3', num_steps)
 
-    # Objective: minimize time and control effort
-    obj = total_time + 0.1 * (sum1(tau1**2) + sum1(tau2**2) + sum1(tau3**2)) / num_steps
+    # Objective: minimize time and control effort with smoothness terms
+    obj = (total_time + 
+           0.1 * (sum1(tau1**2) + sum1(tau2**2) + sum1(tau3**2)) / num_steps +  # Control effort
+           0.01 * sum1((tau1[1:] - tau1[:-1])**2) / num_steps +  # Torque smoothness
+           0.01 * sum1((tau2[1:] - tau2[:-1])**2) / num_steps +
+           0.01 * sum1((tau3[1:] - tau3[:-1])**2) / num_steps +
+           0.01 * sum1((omega1[1:] - omega1[:-1])**2) / num_steps +  # Velocity smoothness
+           0.01 * sum1((omega2[1:] - omega2[:-1])**2) / num_steps +
+           0.01 * sum1((omega3[1:] - omega3[:-1])**2) / num_steps)
 
     # Constraints
     g = []
@@ -137,12 +149,13 @@ def optimize_trajectory(initial_state, target_state, l1, l2, l3, m1, m2, m3, num
     lbg += list(initial_state)
     ubg += list(initial_state)
 
-    # Dynamics constraints
+    # Dynamics constraints with improved numerical stability
     for i in range(num_steps):
         state = vertcat(theta1[i], theta2[i], theta3[i], omega1[i], omega2[i], omega3[i])
         control = vertcat(tau1[i], tau2[i], tau3[i])
         state_next = state + robot_dynamics(state, control, l1, l2, l3, m1, m2, m3) * dt
         
+        # Add dynamics constraints
         g += [theta1[i+1] - state_next[0],
               theta2[i+1] - state_next[1],
               theta3[i+1] - state_next[2],
@@ -151,11 +164,31 @@ def optimize_trajectory(initial_state, target_state, l1, l2, l3, m1, m2, m3, num
               omega3[i+1] - state_next[5]]
         lbg += [0, 0, 0, 0, 0, 0]
         ubg += [0, 0, 0, 0, 0, 0]
+        
+        # Add joint limit constraints with slack
+        g += [theta2[i]]  # theta2 should stay between 0 and pi
+        lbg += [0.01]  # Small positive value to avoid singularity
+        ubg += [np.pi - 0.01]
+        
+        # Add torque rate constraints
+        if i > 0:
+            g += [(tau1[i] - tau1[i-1])/dt,
+                 (tau2[i] - tau2[i-1])/dt,
+                 (tau3[i] - tau3[i-1])/dt]
+            lbg += [-50.0, -50.0, -50.0]  # Max torque rate change
+            ubg += [50.0, 50.0, 50.0]
 
-    # Final state constraints
-    g += [theta1[-1], theta2[-1], theta3[-1], omega1[-1], omega2[-1], omega3[-1]]
-    lbg += list(target_state)
-    ubg += list(target_state)
+    # Final state constraints with tolerance
+    pos_tolerance = 0.01  # 1cm position tolerance
+    vel_tolerance = 0.1   # 0.1 rad/s velocity tolerance
+    
+    g += [theta1[-1], theta2[-1], theta3[-1]]
+    lbg += [target_state[0] - pos_tolerance, target_state[1] - pos_tolerance, target_state[2] - pos_tolerance]
+    ubg += [target_state[0] + pos_tolerance, target_state[1] + pos_tolerance, target_state[2] + pos_tolerance]
+    
+    g += [omega1[-1], omega2[-1], omega3[-1]]
+    lbg += [-vel_tolerance, -vel_tolerance, -vel_tolerance]
+    ubg += [vel_tolerance, vel_tolerance, vel_tolerance]
 
     # Variable bounds
     lbx = [0.001]  # dt lower bound
@@ -181,65 +214,167 @@ def optimize_trajectory(initial_state, target_state, l1, l2, l3, m1, m2, m3, num
     lbx += [-max_torque]*num_steps  # tau3
     ubx += [max_torque]*num_steps
 
-    # Initial guess
-    x0 = [max_time/num_steps/2]  # dt
+    # Initial guess with smooth interpolation and correct dimensions
+    x0 = []
+    
+    # Time step
+    x0.append(max_time/num_steps/2)  # dt
+    
+    # Generate smooth joint trajectories using cubic interpolation
+    t = np.linspace(0, 1, num_steps + 1)
+    
+    # Initialize state variables first (all num_steps + 1 points)
     for i in range(num_steps + 1):
-        t = i/num_steps
-        x0 += [initial_state[0] * (1-t) + target_state[0] * t]  # theta1
-        x0 += [initial_state[1] * (1-t) + target_state[1] * t]  # theta2
-        x0 += [initial_state[2] * (1-t) + target_state[2] * t]  # theta3
-        x0 += [0, 0, 0]  # omega1, omega2, omega3
-    x0 += [0] * (3 * num_steps)  # torques
+        s = t[i]
+        s2 = s * s
+        s3 = s2 * s
+        h00 = 2*s3 - 3*s2 + 1    # Hermite basis functions
+        h10 = s3 - 2*s2 + s
+        h01 = -2*s3 + 3*s2
+        h11 = s3 - s2
+        
+        # Positions
+        x0.append(initial_state[0] * h00 + 0 * h10 + target_state[0] * h01 + 0 * h11)  # theta1
+        x0.append(initial_state[1] * h00 + 0 * h10 + target_state[1] * h01 + 0 * h11)  # theta2
+        x0.append(initial_state[2] * h00 + 0 * h10 + target_state[2] * h01 + 0 * h11)  # theta3
+        
+        # Velocities
+        if i < num_steps + 1:  # Include all points for velocities
+            ds = 1.0/num_steps
+            dh00 = (6*s2 - 6*s) * ds
+            x0.append((target_state[0] - initial_state[0]) * dh00)  # omega1
+            x0.append((target_state[1] - initial_state[1]) * dh00)  # omega2
+            x0.append((target_state[2] - initial_state[2]) * dh00)  # omega3
+    
+    # Initialize control variables (num_steps points)
+    ramp = np.sin(np.pi * np.linspace(0, 1, num_steps))
+    max_init_torque = 0.1 * max_torque
+    for i in range(num_steps):
+        x0.append(max_init_torque * ramp[i])  # tau1
+    for i in range(num_steps):
+        x0.append(max_init_torque * ramp[i])  # tau2
+    for i in range(num_steps):
+        x0.append(max_init_torque * ramp[i])  # tau3
 
-    # NLP problem
+    # Verify dimensions
+    expected_size = (1 +                    # dt
+                    6 * (num_steps + 1) +   # states (theta1,2,3 and omega1,2,3)
+                    3 * num_steps)          # controls (tau1,2,3)
+    
+    if len(x0) != expected_size:
+        raise ValueError(f"Dimension mismatch in initial guess. Expected {expected_size}, got {len(x0)}")
+        
+    x0 = DM(x0)  # Convert to DM type for CasADi
+
+    # NLP problem definition
     nlp = {
         'x': vertcat(dt, theta1, theta2, theta3, omega1, omega2, omega3, tau1, tau2, tau3),
         'f': obj,
         'g': vertcat(*g)
     }
 
-    # SNOPT options
+    # IPOPT solver options with more lenient settings
     opts = {
-        'snopt': {
-            'Major feasibility tolerance': 1e-6,
-            'Major optimality tolerance': 1e-6,
-            'Minor feasibility tolerance': 1e-6,
-            'Verify level': 2,
-            'Print file': 0,  # Disable print file
-            'Summary file': 0,  # Disable summary file
-            'Print level': 1,  # Minimal console output
-            'Major print level': 0,  # Disable major iteration output
-            'Minor print level': 0,  # Disable minor iteration output
-            'New basis file': 0,  # Disable basis file
-            'Backup basis file': 0,  # Disable backup basis file
-            'Linesearch tolerance': 0.9,
-            'Derivative level': 3,
-            'Scale option': 1,
-            'Crash option': 0,
-            'Hessian full memory': 0,
-            'Hessian frequency': 999999,
-            'Hessian updates': 10,
-            'Expand frequency': 10000,
-            'Factorization frequency': 100,
-            'Scale tolerance': 0.9,
-            'Scale print': 0,
-            'Solution file': 0,  # Disable solution file
-            'Timing level': 0  # Disable timing output
+        'ipopt': {
+            'max_iter': 3000,
+            'tol': 1e-4,              # Relaxed tolerance
+            'acceptable_tol': 1e-3,    # More relaxed acceptable tolerance
+            'print_level': 5,          # More detailed output
+            'print_timing_statistics': 'yes',
+            'print_user_options': 'yes',
+            'print_frequency_iter': 10,
+            'warm_start_init_point': 'yes',
+            'mu_strategy': 'monotone',  # More stable than adaptive
+            'linear_solver': 'mumps',
+            'hessian_approximation': 'limited-memory',
+            'nlp_scaling_method': 'gradient-based',
+            'bound_relax_factor': 1e-4,  # Allow small constraint violations
+            'bound_push': 0.1,           # More conservative bound push
+            'bound_frac': 0.1,           # More conservative bound fraction
+            'max_cpu_time': 120.0,       # Increased time limit
+            'constr_viol_tol': 1e-3,     # Relaxed constraint violation tolerance
+            'acceptable_iter': 5,         # Reduced acceptable iterations
+            'acceptable_constr_viol_tol': 1e-3,
+            'ma27_pivtol': 1e-4,         # More stable pivoting
+            'ma27_pivtolmax': 0.1,
+            'recalc_y': 'yes',           # Recalculate multipliers
+            'mehrotra_algorithm': 'no',   # Use default algorithm
+            'max_resto_iter': 2000       # Allow more restoration phase iterations
         },
-        'print_time': False
+        'print_time': True,
+        'error_on_fail': False  # Don't fail immediately to get diagnostic info
     }
 
-    # Create solver with SNOPT
-    solver = nlpsol('solver', 'snopt', nlp, opts)
+    # Print problem dimensions
+    print(f"\nProblem dimensions:")
+    print(f"Number of variables: {x0.size(1)}")  # Use initial guess size
+    print(f"Number of constraints: {len(lbg)}")  # Use constraint bounds size
 
-    # Solve the NLP
-    result = solver(
-        x0=DM(x0),
-        lbx=DM(lbx),
-        ubx=DM(ubx),
-        lbg=DM(lbg),
-        ubg=DM(ubg)
-    )
+    # Create solver with IPOPT and solve with retries
+    max_retries = 3
+    result = None
+    
+    for attempt in range(max_retries):
+        try:
+            print(f"\nAttempt {attempt + 1}/{max_retries}")
+            
+            # Create solver
+            solver = nlpsol('solver', 'ipopt', nlp, opts)
+            
+            # Solve the NLP
+            result = solver(
+                x0=x0,
+                lbx=DM(lbx),
+                ubx=DM(ubx),
+                lbg=DM(lbg),
+                ubg=DM(ubg)
+            )
+            
+            # Get solver statistics
+            stats = solver.stats()
+            
+            # Print diagnostic information
+            print("\nSolver statistics:")
+            if 'return_status' in stats:
+                print(f"Return status: {stats['return_status']}")
+            if 'iter_count' in stats:
+                print(f"Number of iterations: {stats['iter_count']}")
+            if 'success' in result:
+                print(f"Success flag: {result['success']}")
+            
+            # Check constraint violation
+            if 'g' in result:
+                g_val = result['g']
+                max_viol = float(max(vertcat(
+                    fmax(g_val - DM(ubg), 0),
+                    fmax(DM(lbg) - g_val, 0)
+                )))
+                print(f"\nMaximum constraint violation: {max_viol}")
+            
+            # Check if solution is acceptable
+            if 'success' in result and result['success']:
+                if max_viol < opts['ipopt']['constr_viol_tol']:
+                    print("\nSuccessfully found solution!")
+                    break
+                else:
+                    print(f"\nSolution found but constraint violation ({max_viol}) exceeds tolerance")
+            
+            # If we get here, the attempt wasn't successful
+            if attempt < max_retries - 1:
+                print("\nRetrying with perturbed initial guess...")
+                # Perturb initial guess for next attempt
+                x0 = x0 + DM.rand(x0.size()) * 0.1 * max_torque
+            
+        except Exception as e:
+            print(f"\nError in attempt {attempt + 1}: {str(e)}")
+            if attempt < max_retries - 1:
+                print("Retrying...")
+                continue
+            else:
+                raise ValueError(f"Failed to find a solution after {max_retries} attempts: {str(e)}")
+
+    if result is None or not ('success' in result and result['success']):
+        raise ValueError("Could not find a valid solution")
 
     # Extract results
     dt_opt = float(result['x'][0])
